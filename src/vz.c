@@ -653,13 +653,29 @@ static void install_signal_handlers(void)
     fcntl(g_sigpipe[1], F_SETFL, O_NONBLOCK);
     signal(SIGTERM, signal_trampoline);
     signal(SIGINT, signal_trampoline);
+    signal(SIGUSR1, signal_trampoline);
+    signal(SIGUSR2, signal_trampoline);
     dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)g_sigpipe[0], 0,
                                                    dispatch_get_main_queue());
     dispatch_source_set_event_handler(src, ^{
       char buf[32];
-      while (read(g_sigpipe[0], buf, sizeof(buf)) > 0) {
+      int terminate = 0, pause = 0, resume = 0;
+      ssize_t n;
+      while ((n = read(g_sigpipe[0], buf, sizeof(buf))) > 0) {
+          for (ssize_t i = 0; i < n; i++) {
+              if (buf[i] == SIGUSR1)
+                  pause = 1;
+              else if (buf[i] == SIGUSR2)
+                  resume = 1;
+              else
+                  terminate = 1;
+          }
       }
-      if (g_terminating)
+      if (pause)
+          act_pause(NULL, NULL, NULL);
+      if (resume)
+          act_resume(NULL, NULL, NULL);
+      if (!terminate || g_terminating)
           return;
       g_terminating = 1;
       request_shutdown();

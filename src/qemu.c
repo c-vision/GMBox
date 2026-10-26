@@ -107,7 +107,7 @@ static int qmp_count_returns(const char *s)
     return n;
 }
 
-int qemu_request_powerdown(const vm_config *cfg)
+static int qmp_connect(const vm_config *cfg)
 {
     char id[16];
     char path[PATH_MAX];
@@ -135,10 +135,20 @@ int qemu_request_powerdown(const vm_config *cfg)
         close(fd);
         return -1;
     }
+    return fd;
+}
 
-    const char *cmds =
-        "{\"execute\":\"qmp_capabilities\"}\n"
-        "{\"execute\":\"system_powerdown\"}\n";
+static int qmp_request(const vm_config *cfg, const char *command,
+                       char *reply, size_t reply_n)
+{
+    int fd = qmp_connect(cfg);
+    if (fd < 0)
+        return -1;
+
+    char cmds[1024];
+    snprintf(cmds, sizeof(cmds),
+             "{\"execute\":\"qmp_capabilities\"}\n"
+             "{\"execute\":\"%s\"}\n", command);
     if (qmp_write_all(fd, cmds) != 0) {
         close(fd);
         return -1;
@@ -155,11 +165,61 @@ int qemu_request_powerdown(const vm_config *cfg)
         buf[used] = 0;
         if (qmp_count_returns(buf) >= 2) {
             ok = 0;
+            if (reply && reply_n)
+                snprintf(reply, reply_n, "%s", buf);
             break;
         }
     }
     close(fd);
     return ok;
+}
+
+int qemu_request_powerdown(const vm_config *cfg)
+{
+    return qmp_request(cfg, "system_powerdown", NULL, 0);
+}
+
+int qemu_request_reset(const vm_config *cfg)
+{
+    return qmp_request(cfg, "system_reset", NULL, 0);
+}
+
+int qemu_request_pause(const vm_config *cfg)
+{
+    return qmp_request(cfg, "stop", NULL, 0);
+}
+
+int qemu_request_resume(const vm_config *cfg)
+{
+    return qmp_request(cfg, "cont", NULL, 0);
+}
+
+int qemu_query_status(const vm_config *cfg, char *status, size_t n)
+{
+    char reply[8192];
+    if (qmp_request(cfg, "query-status", reply, sizeof(reply)) != 0)
+        return -1;
+    const char *p = strstr(reply, "\"status\"");
+    if (!p)
+        return -1;
+    p = strchr(p, ':');
+    if (!p)
+        return -1;
+    p++;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    if (*p != '\"')
+        return -1;
+    p++;
+    const char *e = strchr(p, '\"');
+    if (!e)
+        return -1;
+    size_t len = (size_t)(e - p);
+    if (len >= n)
+        len = n - 1;
+    memcpy(status, p, len);
+    status[len] = 0;
+    return 0;
 }
 
 int qemu_run(vm_config *cfg, int headless, int seconds)

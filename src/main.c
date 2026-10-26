@@ -32,7 +32,11 @@ static void usage(FILE *out)
             "  vmfc create NOME [opzioni]\n"
             "  vmfc start  NOME [opzioni]\n"
             "  vmfc gui    NOME [opzioni]\n"
-            "  vmfc stop   NOME [--dir CARTELLA]\n"
+            "  vmfc stop   NOME [--force] [--dir CARTELLA]\n"
+            "  vmfc pause  NOME [--dir CARTELLA]\n"
+            "  vmfc resume NOME [--dir CARTELLA]\n"
+            "  vmfc reboot NOME [--dir CARTELLA]\n"
+            "  vmfc status NOME [--dir CARTELLA]\n"
             "  vmfc info   NOME [--dir CARTELLA]\n"
             "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
             "  vmfc delete NOME [--dir CARTELLA] [--force]\n"
@@ -780,7 +784,7 @@ static int cmd_tools(void)
     return 0;
 }
 
-static int cmd_stop(const char *root, const char *name)
+static int cmd_stop(const char *root, const char *name, int force)
 {
     vm_config cfg;
     if (load_vm(root, name, &cfg) != 0)
@@ -788,6 +792,20 @@ static int cmd_stop(const char *root, const char *name)
     pid_t pid;
     if (!vm_running(&cfg, &pid)) {
         printf("La VM \"%s\" e' gia' spenta.\n", name);
+        return 0;
+    }
+    if (force) {
+        if (kill(pid, SIGKILL) != 0 && errno != ESRCH) {
+            fprintf(stderr, "vmfc: impossibile forzare l'arresto: %s\n", strerror(errno));
+            return 1;
+        }
+        for (int i = 0; i < 25; i++) {
+            if (kill(pid, 0) != 0 && errno == ESRCH)
+                break;
+            usleep(100000);
+        }
+        unlink(cfg.pidfile);
+        printf("VM arrestata con forza.\n");
         return 0;
     }
     int acpi = 0;
@@ -823,6 +841,82 @@ static int cmd_stop(const char *root, const char *name)
     kill(pid, SIGKILL);
     usleep(300000);
     unlink(cfg.pidfile);
+    return 0;
+}
+
+static int cmd_pause(const char *root, const char *name)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    pid_t pid;
+    if (!vm_running(&cfg, &pid)) {
+        fprintf(stderr, "vmfc: la VM \"%s\" e' spenta\n", name);
+        return 1;
+    }
+    if (qemu_request_pause(&cfg) != 0) {
+        if (vm_guest_is_windows(&cfg) || kill(pid, SIGUSR1) != 0) {
+            fprintf(stderr, "vmfc: pausa non disponibile per questo backend\n");
+            return 1;
+        }
+    }
+    printf("VM \"%s\" in pausa.\n", name);
+    return 0;
+}
+
+static int cmd_resume(const char *root, const char *name)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    pid_t pid;
+    if (!vm_running(&cfg, &pid)) {
+        fprintf(stderr, "vmfc: la VM \"%s\" e' spenta\n", name);
+        return 1;
+    }
+    if (qemu_request_resume(&cfg) != 0) {
+        if (vm_guest_is_windows(&cfg) || kill(pid, SIGUSR2) != 0) {
+            fprintf(stderr, "vmfc: ripresa non disponibile per questo backend\n");
+            return 1;
+        }
+    }
+    printf("VM \"%s\" ripresa.\n", name);
+    return 0;
+}
+
+static int cmd_reboot(const char *root, const char *name)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    pid_t pid;
+    if (!vm_running(&cfg, &pid)) {
+        fprintf(stderr, "vmfc: la VM \"%s\" e' spenta\n", name);
+        return 1;
+    }
+    if (qemu_request_reset(&cfg) != 0) {
+        fprintf(stderr, "vmfc: reboot non disponibile per questo backend (QMP assente)\n");
+        return 1;
+    }
+    printf("Riavvio richiesto a \"%s\" (pid %ld).\n", name, (long)pid);
+    return 0;
+}
+
+static int cmd_status(const char *root, const char *name)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    pid_t pid;
+    if (!vm_running(&cfg, &pid)) {
+        printf("La VM \"%s\" e' spenta.\n", name);
+        return 0;
+    }
+    char state[64];
+    if (qemu_query_status(&cfg, state, sizeof(state)) == 0)
+        printf("La VM \"%s\" e' in esecuzione (pid %ld, stato %s).\n", name, (long)pid, state);
+    else
+        printf("La VM \"%s\" e' in esecuzione (pid %ld, stato non disponibile).\n", name, (long)pid);
     return 0;
 }
 
@@ -915,6 +1009,28 @@ int main(int argc, char **argv)
         return cmd_start(rest_argc, rest, root);
     if (!strcmp(cmd, "stop")) {
         const char *name = NULL;
+        int force = 0;
+        for (int i = 0; i < rest_argc; i++) {
+            if (!strcmp(rest[i], "--dir")) {
+                i++;
+                continue;
+            }
+            if (!strcmp(rest[i], "--force")) {
+                force = 1;
+                continue;
+            }
+            if (rest[i][0] != '-' && !name)
+                name = rest[i];
+        }
+        if (!name) {
+            fprintf(stderr, "vmfc: specifica il nome della VM\n");
+            return 2;
+        }
+        return cmd_stop(root, name, force);
+    }
+    if (!strcmp(cmd, "pause") || !strcmp(cmd, "resume") ||
+        !strcmp(cmd, "reboot") || !strcmp(cmd, "status")) {
+        const char *name = NULL;
         for (int i = 0; i < rest_argc; i++) {
             if (!strcmp(rest[i], "--dir")) {
                 i++;
@@ -927,7 +1043,13 @@ int main(int argc, char **argv)
             fprintf(stderr, "vmfc: specifica il nome della VM\n");
             return 2;
         }
-        return cmd_stop(root, name);
+        if (!strcmp(cmd, "pause"))
+            return cmd_pause(root, name);
+        if (!strcmp(cmd, "resume"))
+            return cmd_resume(root, name);
+        if (!strcmp(cmd, "reboot"))
+            return cmd_reboot(root, name);
+        return cmd_status(root, name);
     }
     if (!strcmp(cmd, "delete")) {
         const char *name = NULL;
