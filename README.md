@@ -1,30 +1,29 @@
 # GMBox
 
-Clone leggero di VMware Fusion per Apple silicon, scritto in **C99** (niente Python).
-CLI `vmfc` + GUI AppKit; guest Linux con `Virtualization.framework`; guest
-**Windows 11 ARM64** con un VMM nativo su `Hypervisor.framework` (`tools/hvf_win.c`),
-senza QEMU a runtime.
+A lightweight VMware Fusion clone for Apple silicon, written in **C99** (no Python).
+`vmfc` CLI + AppKit GUI; Linux guests on `Virtualization.framework`; **Windows 11 ARM64**
+guests on a native `Hypervisor.framework` VMM (`tools/hvf_win.c`), with no QEMU at runtime.
 
-## Stato
+## Status
 
-- **Windows 11 Pro ARM64 arriva al desktop** nel VMM HVF nativo: EDK2/UEFI → Windows Boot Manager →
-  kernel → login → desktop (verificato dal framebuffer).
-- **Linux (VZ)**: EFI, NVMe, ISO come USB, rete NAT, tastiera/mouse, audio, grafica virtio.
-- **Import VMware**: VMDK split-sparse → raw; rilevamento BitLocker.
+- **Windows 11 Pro ARM64 boots to the desktop** in the native HVF VMM: EDK2/UEFI → Windows Boot
+  Manager → kernel → sign-in → desktop (verified from the framebuffer).
+- **Linux (VZ)**: EFI, NVMe, ISO as USB, NAT networking, keyboard/mouse, audio, virtio graphics.
+- **VMware import**: split-sparse VMDK → raw; BitLocker detection.
 
-Il VMM nativo emula: GICv3 (HVF), timer, PL011, PL031, fw_cfg (ACPI generato in C), flash CFI
-per le variabili UEFI, PCIe ECAM, controller **NVMe**, controller **USB EHCI** con tastiera e
-mouse HID, framebuffer **ramfb**. Il PMU è emulato dal framework (`PMUVer=1`).
+The native VMM emulates: GICv3 (HVF), timers, PL011, PL031, fw_cfg (ACPI tables generated in C),
+CFI flash for UEFI variables, PCIe ECAM, an **NVMe** controller, a **USB EHCI** controller with HID
+keyboard and mouse, and a **ramfb** framebuffer. The PMU is emulated by the framework (`PMUVer=1`).
 
-## Compilare ed eseguire
+## Build and run
 
 ```sh
 make            # CLI + GUI
-make acpi       # rigenera le tabelle ACPI (serve iasl)
-make hvf-win    # VMM Windows nativo (build/hvf_win)
+make acpi       # regenerate the ACPI tables (needs iasl)
+make hvf-win    # native Windows VMM (build/hvf_win)
 ```
 
-Esempio (usare **una copia** del disco: Windows scrive sul disco):
+Example (use **a copy** of the disk: Windows writes to it):
 
 ```sh
 cp -c "vms/Windows 11 Pro.vmfc/disk.raw" /tmp/d.raw
@@ -35,28 +34,28 @@ GMBOX_FB_DUMP=/tmp/s.bmp GMBOX_FB_INTERVAL=10 \
 GMBOX_DISK=/tmp/d.raw GMBOX_VARS=/tmp/v.fd GMBOX_WATCHDOG_SEC=900 build/hvf_win
 ```
 
-Input da tastiera/mouse: scrivere comandi sulla FIFO (`key space`, `type testo`, `key enter`,
-`move dx dy`, `click l`, …). Lo schermo si legge dal BMP (`sips -s format png s.bmp --out s.png`).
+Keyboard/mouse input: write commands to the FIFO (`key space`, `type text`, `key enter`,
+`move dx dy`, `click l`, …). Read the screen from the BMP (`sips -s format png s.bmp --out s.png`).
 
-Variabili utili: `GMBOX_FW`, `GMBOX_VARS`, `GMBOX_DISK`, `GMBOX_NVME_LOG`, `GMBOX_USBLOG`,
-`GMBOX_KDBRK` (stampa i driver caricati dal kernel Windows), `GMBOX_NO_USB`.
+Useful variables: `GMBOX_FW`, `GMBOX_VARS`, `GMBOX_DISK`, `GMBOX_NVME_LOG`, `GMBOX_USBLOG`,
+`GMBOX_KDBRK` (prints the drivers loaded by the Windows kernel), `GMBOX_NO_USB`.
 
-## Limitazioni attuali
+## Current limitations
 
-- Il VMM nativo è un **prototipo**: percorsi di firmware, VARS e disco sono ancora in parte fissi nel codice.
-- Avvio lento (circa 3 minuti fino al login) e **una sola vCPU**.
-- Display solo `ramfb` 800x600, senza accelerazione 3D né audio; nessun appunti/cartelle condivise.
-- Nessuna rete nel VMM nativo, nessun vTPM, Secure Boot, USB passthrough.
-- Nessuno snapshot, né cifratura della VM.
-- ACPI minimale (senza IORT/DBG2), PCIe senza MSI-X, mouse relativo (non assoluto).
-- Se il disco contiene boot falliti, Windows mostra la schermata *Recovery*: serve `GMBOX_AUTOENTER=1`.
-- Guest Windows su VZ non supportato (bug iBoot/NVRAM); l'installazione da ISO nel VMM nativo non è testata.
-- `vmfc list` non scende nelle sottocartelle; la libreria VM e il wizard di creazione non esistono ancora.
+- The native VMM is a **prototype**: firmware, VARS and disk paths are still partly hard-coded.
+- Slow boot (about 3 minutes to the sign-in screen) and **a single vCPU**.
+- Display is `ramfb` 800x600 only: no 3D acceleration, no audio, no clipboard or shared folders.
+- No networking in the native VMM; no vTPM, Secure Boot or USB passthrough.
+- No snapshots and no VM encryption.
+- Minimal ACPI (no IORT/DBG2), PCIe without MSI-X, relative mouse only (no absolute pointer).
+- If the disk carries failed boots, Windows shows the *Recovery* screen: `GMBOX_AUTOENTER=1` is needed.
+- Windows guests on VZ are unsupported (iBoot/NVRAM bug); installing from ISO in the native VMM is untested.
+- `vmfc list` does not descend into subfolders; there is no VM library or creation wizard yet.
 
-## Struttura
+## Layout
 
-- `src/` CLI `vmfc` e app GUI (VZ, import VMDK).
-- `tools/hvf_win.c` e `tools/*.inc` — VMM nativo, USB, tracer, ACPI (`acpi_build.c`, `dsdt.asl`).
-- `tools/firmware/` firmware EDK2 (ricetta di build in `tools/firmware/README.md`).
+- `src/` — `vmfc` CLI and GUI app (VZ, VMDK import).
+- `tools/hvf_win.c` and `tools/*.inc` — native VMM, USB, tracers, ACPI (`acpi_build.c`, `dsdt.asl`).
+- `tools/firmware/` — EDK2 firmware (build recipe in `tools/firmware/README.md`).
 
-Regola di progetto: solo C99 / shell, nessun Python.
+Project rule: C99 / shell only, no Python.
