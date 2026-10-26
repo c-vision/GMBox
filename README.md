@@ -4,6 +4,10 @@ A lightweight VMware Fusion clone for Apple silicon, written in **C99** (no Pyth
 `vmfc` CLI + AppKit GUI; Linux guests on `Virtualization.framework`; **Windows 11 ARM64**
 guests on a native `Hypervisor.framework` VMM (`tools/hvf_win.c`), with no QEMU at runtime.
 
+![Windows 11 ARM64 desktop running in the native GMBox VMM](docs/windows11-desktop.png)
+
+*Windows 11 Pro ARM64 desktop, booted by the native Hypervisor.framework VMM (no QEMU).*
+
 ## Status
 
 - **Windows 11 Pro ARM64 boots to the desktop** in the native HVF VMM: EDK2/UEFI → Windows Boot
