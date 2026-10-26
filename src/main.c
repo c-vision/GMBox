@@ -1020,6 +1020,10 @@ static int cmd_autostart(const char *root, const char *name, int disable,
     vm_config cfg;
     if (load_vm(root, name, &cfg) != 0)
         return 1;
+    if (vm_guest_is_windows(&cfg)) {
+        fprintf(stderr, "vmfc: autostart Windows non supportato: usa build/hvf_win\n");
+        return 1;
+    }
 
     const char *home = getenv("HOME");
     if (!home || !*home) {

@@ -68,7 +68,8 @@ vmfc autostart "Windows 11 Pro" --disable
 
 `vmfc autostart` writes a per-VM LaunchAgent under `~/Library/LaunchAgents` and loads it in the
 current Aqua session; `--dry-run` prints the plist without changing the system. The agent gives the
-VM 30 seconds to shut down cleanly at logout.
+VM 30 seconds to shut down cleanly at logout. Autostart is available for VZ guests; Windows is
+launched by the native `build/hvf_win` runner instead.
 
 The VM library scans subfolders, shows status, disk/RAM, last start and tags. Tags are stored in
 `config.vmx` (`vmfc.tags`). VZ guests accept pause/resume through `SIGUSR1`/`SIGUSR2`, reboot through
