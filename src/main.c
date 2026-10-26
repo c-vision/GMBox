@@ -41,6 +41,7 @@ static void usage(FILE *out)
             "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
             "  vmfc delete NOME [--dir CARTELLA] [--force]\n"
             "  vmfc import SORGENTE [opzioni]\n"
+            "  vmfc autostart NOME [--disable|--status] [--dry-run] [--dir CARTELLA]\n"
             "  vmfc tools\n"
             "  vmfc version\n"
             "\n"
@@ -1004,6 +1005,142 @@ static int cmd_status(const char *root, const char *name)
     return 0;
 }
 
+static void xml_escape(const char *in, char *out, size_t n)
+{
+    size_t j = 0;
+    for (size_t i = 0; in && in[i] && j + 8 < n; i++) {
+        const char *rep = NULL;
+        switch (in[i]) {
+        case '&': rep = "&amp;"; break;
+        case '<': rep = "&lt;"; break;
+        case '>': rep = "&gt;"; break;
+        case '"': rep = "&quot;"; break;
+        case '\'': rep = "&apos;"; break;
+        default: out[j++] = in[i]; continue;
+        }
+        size_t len = strlen(rep);
+        memcpy(out + j, rep, len);
+        j += len;
+    }
+    out[j] = 0;
+}
+
+static int run_wait(char *const argv[])
+{
+    pid_t pid = 0;
+    int rc = posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
+    if (rc != 0)
+        return -1;
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0)
+        return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int cmd_autostart(const char *root, const char *name, int disable,
+                          int status_only, int dry_run, const char *self)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+
+    const char *home = getenv("HOME");
+    if (!home || !*home) {
+        fprintf(stderr, "vmfc: HOME non impostata\n");
+        return 1;
+    }
+    char agents[PATH_MAX], plist[PATH_MAX];
+    snprintf(agents, sizeof(agents), "%s/Library/LaunchAgents", home);
+    snprintf(plist, sizeof(plist), "%s/com.gmbox.%s.plist", agents, cfg.uuid);
+    char label[128];
+    snprintf(label, sizeof(label), "com.gmbox.%s", cfg.uuid);
+
+    if (status_only) {
+        int loaded = 0;
+        char target[128];
+        snprintf(target, sizeof(target), "gui/%u/%s", (unsigned)getuid(), label);
+        char *args[] = { (char *)"/bin/launchctl", (char *)"print", target, NULL };
+        loaded = path_exists(plist) && run_wait(args) == 0;
+        printf("Autostart di \"%s\": %s\n", cfg.name, loaded ? "attivo" : "disattivato");
+        return loaded ? 0 : 1;
+    }
+
+    if (disable) {
+        char target[128];
+        snprintf(target, sizeof(target), "gui/%u/%s", (unsigned)getuid(), label);
+        char *args[] = { (char *)"/bin/launchctl", (char *)"bootout", target, NULL };
+        run_wait(args);
+        if (unlink(plist) != 0 && errno != ENOENT) {
+            fprintf(stderr, "vmfc: impossibile rimuovere %s: %s\n", plist, strerror(errno));
+            return 1;
+        }
+        printf("Autostart di \"%s\" disattivato.\n", cfg.name);
+        return 0;
+    }
+
+    char exe[PATH_MAX];
+    if (!realpath(self, exe))
+        snprintf(exe, sizeof(exe), "%s", self);
+    char logs[PATH_MAX], outlog[PATH_MAX], errlog[PATH_MAX];
+    snprintf(logs, sizeof(logs), "%s/Library/Logs/GMBox", home);
+    snprintf(outlog, sizeof(outlog), "%s/%s.out.log", logs, cfg.uuid);
+    snprintf(errlog, sizeof(errlog), "%s/%s.err.log", logs, cfg.uuid);
+    char root_abs[PATH_MAX];
+    if (!realpath(root, root_abs))
+        snprintf(root_abs, sizeof(root_abs), "%s", root);
+    char xlabel[256], xexe[PATH_MAX * 2], xname[512], xroot[PATH_MAX * 2];
+    char xout[PATH_MAX * 2], xerr[PATH_MAX * 2];
+    xml_escape(label, xlabel, sizeof(xlabel));
+    xml_escape(exe, xexe, sizeof(xexe));
+    xml_escape(cfg.name, xname, sizeof(xname));
+    xml_escape(root_abs, xroot, sizeof(xroot));
+    xml_escape(outlog, xout, sizeof(xout));
+    xml_escape(errlog, xerr, sizeof(xerr));
+
+    char xml[8192];
+    snprintf(xml, sizeof(xml),
+             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+             "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+             "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+             "<plist version=\"1.0\"><dict>\n"
+             "  <key>Label</key><string>%s</string>\n"
+             "  <key>ProgramArguments</key><array>"
+             "<string>%s</string><string>start</string><string>%s</string>"
+             "<string>--dir</string><string>%s</string></array>\n"
+             "  <key>RunAtLoad</key><true/>\n"
+             "  <key>LimitLoadToSessionType</key><string>Aqua</string>\n"
+             "  <key>StandardOutPath</key><string>%s</string>\n"
+             "  <key>StandardErrorPath</key><string>%s</string>\n"
+             "</dict></plist>\n",
+             xlabel, xexe, xname, xroot, xout, xerr);
+
+    if (dry_run) {
+        printf("%s", xml);
+        return 0;
+    }
+    if (mkdir_p(agents, 0755) != 0 || mkdir_p(logs, 0755) != 0) {
+        fprintf(stderr, "vmfc: impossibile creare le cartelle LaunchAgent/Logs\n");
+        return 1;
+    }
+    if (write_text_file(plist, xml) != 0) {
+        fprintf(stderr, "vmfc: impossibile scrivere %s\n", plist);
+        return 1;
+    }
+
+    char target[128];
+    snprintf(target, sizeof(target), "gui/%u/%s", (unsigned)getuid(), label);
+    char *bootout[] = { (char *)"/bin/launchctl", (char *)"bootout", target, NULL };
+    run_wait(bootout);
+    char *bootstrap[] = { (char *)"/bin/launchctl", (char *)"bootstrap",
+                          (char *)target, plist, NULL };
+    if (run_wait(bootstrap) != 0) {
+        fprintf(stderr, "vmfc: launchctl non ha caricato %s\n", plist);
+        return 1;
+    }
+    printf("Autostart di \"%s\" attivato: %s\n", cfg.name, plist);
+    return 0;
+}
+
 static int cmd_delete(const char *root, const char *name, int force)
 {
     vm_config cfg;
@@ -1155,6 +1292,22 @@ int main(int argc, char **argv)
             return 2;
         }
         return cmd_delete(root, name, force);
+    }
+    if (!strcmp(cmd, "autostart")) {
+        const char *name = NULL;
+        int disable = 0, status_only = 0, dry_run = 0;
+        for (int i = 0; i < rest_argc; i++) {
+            if (!strcmp(rest[i], "--dir")) { i++; continue; }
+            if (!strcmp(rest[i], "--disable") || !strcmp(rest[i], "--off")) { disable = 1; continue; }
+            if (!strcmp(rest[i], "--status")) { status_only = 1; continue; }
+            if (!strcmp(rest[i], "--dry-run")) { dry_run = 1; continue; }
+            if (rest[i][0] != '-' && !name) { name = rest[i]; continue; }
+        }
+        if (!name) {
+            fprintf(stderr, "vmfc: specifica il nome della VM\n");
+            return 2;
+        }
+        return cmd_autostart(root, name, disable, status_only, dry_run, argv[0]);
     }
     if (!strcmp(cmd, "tag")) {
         const char *name = NULL;
