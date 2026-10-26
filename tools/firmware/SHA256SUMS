@@ -1,0 +1,5 @@
+f7d7e66529591121b275d8fe1f32cfbf2b7c4da1b28762a45f54c3b950e08900  tools/firmware/edk2-aarch64-gmbox-pci1-code.fd
+a59ea1d70dab78f087d643a85a21c9a0f1169d2ce20849289fcd83d5e4366518  tools/firmware/edk2-aarch64-gmbox-pci1-release-code.fd
+b3b855c5a80310168051164986855692d1bdb06e67619856177965cd87c6774f  tools/firmware/edk2-aarch64-gmbox-pci1-release-vars.fd
+b3b855c5a80310168051164986855692d1bdb06e67619856177965cd87c6774f  tools/firmware/edk2-aarch64-gmbox-pci1-vars.fd
+8a6c078ee6b376a62f0711d6eeace12ba4df3131cb3969b74688e81f930fa003  tools/firmware/edk2-aarch64-gmbox-pci2-boot-code.fd

@@ -1,0 +1,7 @@
+vms/
+build/
+*.fd
+*.raw
+*.bak
+graphify-out/
+.DS_Store
