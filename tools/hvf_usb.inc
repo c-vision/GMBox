@@ -360,7 +360,7 @@ static void usb_reset_regs(void)
         usb_devs[i].mqh = usb_devs[i].mqt = 0;
     }
     usb_portsc[0] = 0x1000 | 0x3;             /* composite HID keyboard+mouse */
-    usb_portsc[1] = 0x1000 | 0x3;             /* storage or placeholder */
+    usb_portsc[1] = (usb_devs[1].is_msc ? (0x1000 | 0x3) : (0x1000 | 0x2));
 }
 
 static uint32_t usb_frindex(void)
@@ -405,7 +405,7 @@ static uint64_t usb_read(uint64_t off, int size)
 {
     uint32_t rv = usb_reg32(off & ~3ULL);
     uint32_t v = rv >> ((off & 3) * 8);
-    if (getenv("GMBOX_USBLOG") && (off == 0x04 || off == 0x6c)) {
+    if (getenv("GMBOX_USBLOG") && (off == 0x04 || off == 0x68 || off == 0x6c)) {
         static unsigned vlog;
         if (vlog++ < 30) fprintf(stderr, "USB reg value off=0x%llx v=0x%x\n", (unsigned long long)off, rv);
     }
