@@ -49,6 +49,8 @@ Useful variables: `GMBOX_FW`, `GMBOX_VARS`, `GMBOX_DISK`, `GMBOX_NVME_LOG`, `GMB
 ```sh
 vmfc create --wizard                 # guided VM creation
 vmfc clone "Windows 11 Pro" "Windows Lab"
+vmfc disk "Windows 11 Pro"
+vmfc compact "Windows 11 Pro"          # VM stopped
 vmfc list --filter windows --tag work
 vmfc tag "Windows 11 Pro" lavoro
 vmfc status "Windows 11 Pro"

@@ -7,6 +7,7 @@
 
 #include <ctype.h>
 #include <dirent.h>
+#include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
 #include <spawn.h>
@@ -40,6 +41,8 @@ static void usage(FILE *out)
             "  vmfc status NOME [--dir CARTELLA]\n"
             "  vmfc info   NOME [--dir CARTELLA]\n"
             "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
+            "  vmfc disk    NOME [--dir CARTELLA]\n"
+            "  vmfc compact NOME [--dir CARTELLA]\n"
             "  vmfc clone  SORGENTE NUOVO [--dir CARTELLA]\n"
             "  vmfc delete NOME [--dir CARTELLA] [--force]\n"
             "  vmfc import SORGENTE [opzioni]\n"
@@ -1234,6 +1237,89 @@ static int cmd_clone(const char *root, const char *src_name, const char *dst_nam
     return 0;
 }
 
+static int cmd_disk(const char *root, const char *name)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    struct stat sb;
+    if (stat(cfg.disk, &sb) != 0) {
+        fprintf(stderr, "vmfc: disco non trovato: %s\n", cfg.disk);
+        return 1;
+    }
+    unsigned long long allocated = (unsigned long long)sb.st_blocks * 512ULL;
+    char virt[64], alloc[64];
+    format_gib((uint64_t)(sb.st_size / (1024ULL * 1024ULL)), virt, sizeof(virt));
+    format_gib(allocated / (1024ULL * 1024ULL), alloc, sizeof(alloc));
+    printf("Disco:    %s\n", cfg.disk);
+    printf("Virtuale: %s (%llu byte)\n", virt, (unsigned long long)sb.st_size);
+    printf("Allocato: %s (%llu byte)\n", alloc, allocated);
+    return 0;
+}
+
+static int all_zero(const unsigned char *p, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        if (p[i] != 0)
+            return 0;
+    return 1;
+}
+
+static int cmd_compact(const char *root, const char *name)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    pid_t pid;
+    if (vm_running(&cfg, &pid)) {
+        fprintf(stderr, "vmfc: la VM e' in esecuzione (pid %ld); arrestala prima\n", (long)pid);
+        return 1;
+    }
+    int fd = open(cfg.disk, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "vmfc: impossibile aprire %s: %s\n", cfg.disk, strerror(errno));
+        return 1;
+    }
+    struct stat before;
+    if (fstat(fd, &before) != 0) {
+        close(fd);
+        return 1;
+    }
+    const size_t block = 1024 * 1024;
+    unsigned char *buf = malloc(block);
+    if (!buf) {
+        close(fd);
+        fprintf(stderr, "vmfc: out of memory\n");
+        return 1;
+    }
+    off_t offset = 0;
+    int punched = 0, failed = 0;
+    ssize_t n;
+    while ((n = read(fd, buf, block)) > 0) {
+        if ((size_t)n == block && all_zero(buf, block)) {
+            fpunchhole_t fh;
+            memset(&fh, 0, sizeof(fh));
+            fh.fp_offset = offset;
+            fh.fp_length = n;
+            if (fcntl(fd, F_PUNCHHOLE, &fh) == 0)
+                punched++;
+            else
+                failed++;
+        }
+        offset += n;
+    }
+    free(buf);
+    fsync(fd);
+    struct stat after;
+    fstat(fd, &after);
+    close(fd);
+    unsigned long long a = (unsigned long long)before.st_blocks * 512ULL;
+    unsigned long long b = (unsigned long long)after.st_blocks * 512ULL;
+    printf("Compattata \"%s\": %d blocchi liberati, %d errori.\n", cfg.name, punched, failed);
+    printf("Allocato: %llu MiB -> %llu MiB\n", a / (1024ULL * 1024ULL), b / (1024ULL * 1024ULL));
+    return failed ? 1 : 0;
+}
+
 static int cmd_delete(const char *root, const char *name, int force)
 {
     vm_config cfg;
@@ -1385,6 +1471,18 @@ int main(int argc, char **argv)
             return 2;
         }
         return cmd_delete(root, name, force);
+    }
+    if (!strcmp(cmd, "disk") || !strcmp(cmd, "compact")) {
+        const char *name = NULL;
+        for (int i = 0; i < rest_argc; i++) {
+            if (!strcmp(rest[i], "--dir")) { i++; continue; }
+            if (rest[i][0] != '-' && !name) name = rest[i];
+        }
+        if (!name) {
+            fprintf(stderr, "vmfc: specifica il nome della VM\n");
+            return 2;
+        }
+        return !strcmp(cmd, "disk") ? cmd_disk(root, name) : cmd_compact(root, name);
     }
     if (!strcmp(cmd, "clone")) {
         const char *src_name = NULL, *dst_name = NULL;
