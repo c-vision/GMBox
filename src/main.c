@@ -29,7 +29,7 @@ static void usage(FILE *out)
             "\n"
             "Uso:\n"
             "  vmfc list   [--dir CARTELLA] [--filter TESTO] [--tag TAG]\n"
-            "  vmfc create NOME [opzioni]\n"
+            "  vmfc create [NOME] [--wizard] [opzioni]\n"
             "  vmfc start  NOME [opzioni]\n"
             "  vmfc gui    NOME [opzioni]\n"
             "  vmfc stop   NOME [--force] [--dir CARTELLA]\n"
@@ -198,6 +198,65 @@ static void config_paths(vm_config *cfg, const char *root)
     vm_bundle_path(root, cfg->name, cfg->bundle, sizeof(cfg->bundle));
 }
 
+static int prompt_line(const char *label, const char *def, char *out, size_t n)
+{
+    char line[PATH_MAX];
+    printf("%s", label);
+    if (def && *def)
+        printf(" [%s]", def);
+    printf(": ");
+    fflush(stdout);
+    if (!fgets(line, sizeof(line), stdin))
+        return -1;
+    char *v = str_trim(line);
+    char tmp[PATH_MAX];
+    snprintf(tmp, sizeof(tmp), "%s", *v ? v : (def ? def : ""));
+    snprintf(out, n, "%s", tmp);
+    return 0;
+}
+
+static int wizard_fill(vm_config *cfg, char *iso, size_t iso_n,
+                       char *shared, size_t shared_n, int *start_now)
+{
+    char line[PATH_MAX], choice[16];
+    if (!cfg->name[0] &&
+        prompt_line("Nome VM", "Windows 11", cfg->name, sizeof(cfg->name)) != 0)
+        return -1;
+    if (!vm_name_valid(cfg->name)) {
+        fprintf(stderr, "vmfc: nome VM non valido\n");
+        return -1;
+    }
+    if (prompt_line("Guest OS", cfg->guest_os, cfg->guest_os, sizeof(cfg->guest_os)) != 0)
+        return -1;
+    snprintf(line, sizeof(line), "%u", cfg->cpus);
+    if (prompt_line("CPU", line, line, sizeof(line)) != 0 ||
+        parse_u32(line, &cfg->cpus) != 0 || cfg->cpus < 1 || cfg->cpus > 64) {
+        fprintf(stderr, "vmfc: numero CPU non valido\n");
+        return -1;
+    }
+    format_gib(cfg->memory_mib, line, sizeof(line));
+    if (prompt_line("Memoria", line, line, sizeof(line)) != 0 ||
+        parse_size_mib(line, &cfg->memory_mib) != 0 || cfg->memory_mib < 512) {
+        fprintf(stderr, "vmfc: memoria non valida (minimo 512 MiB)\n");
+        return -1;
+    }
+    format_gib(cfg->disk_mib, line, sizeof(line));
+    if (prompt_line("Disco", line, line, sizeof(line)) != 0 ||
+        parse_size_mib(line, &cfg->disk_mib) != 0 || cfg->disk_mib < 1024) {
+        fprintf(stderr, "vmfc: disco non valido (minimo 1 GB)\n");
+        return -1;
+    }
+    if (prompt_line("ISO (vuoto per nessuna)", iso, iso, iso_n) != 0)
+        return -1;
+    if (prompt_line("Cartella condivisa (vuoto per nessuna)", shared, shared, shared_n) != 0)
+        return -1;
+    if (prompt_line("Avviare ora? (s/N)", *start_now ? "s" : "N", choice, sizeof(choice)) != 0)
+        return -1;
+    *start_now = str_ieq(choice, "s") || str_ieq(choice, "si") || str_ieq(choice, "y") ||
+                 str_ieq(choice, "yes");
+    return 0;
+}
+
 static int cmd_create(int argc, char **argv, const char *root)
 {
     const char *name = NULL;
@@ -207,6 +266,7 @@ static int cmd_create(int argc, char **argv, const char *root)
     const char *guest = VMFC_DEFAULT_GUEST;
     int readonly = 0;
     int start_now = 0;
+    int wizard = 0;
     int err = 0;
     vm_config cfg;
 
@@ -251,6 +311,8 @@ static int cmd_create(int argc, char **argv, const char *root)
             readonly = 1;
         } else if (!strcmp(argv[i], "--start")) {
             start_now = 1;
+        } else if (!strcmp(argv[i], "--wizard")) {
+            wizard = 1;
         } else if (!strcmp(argv[i], "--dir")) {
             root = arg_value(argc, argv, "--dir", &i, &err);
         } else if (argv[i][0] == '-') {
@@ -265,6 +327,28 @@ static int cmd_create(int argc, char **argv, const char *root)
     }
     if (err)
         return 2;
+
+    char iso_buf[PATH_MAX], shared_buf[PATH_MAX];
+    if (iso)
+        snprintf(iso_buf, sizeof(iso_buf), "%s", iso);
+    if (shared)
+        snprintf(shared_buf, sizeof(shared_buf), "%s", shared);
+
+    if (name)
+        snprintf(cfg.name, sizeof(cfg.name), "%s", name);
+    if (guest)
+        snprintf(cfg.guest_os, sizeof(cfg.guest_os), "%s", guest);
+
+    if (wizard) {
+        if (wizard_fill(&cfg, iso_buf, sizeof(iso_buf),
+                        shared_buf, sizeof(shared_buf), &start_now) != 0)
+            return 2;
+        iso = iso_buf[0] ? iso_buf : NULL;
+        shared = shared_buf[0] ? shared_buf : NULL;
+        name = cfg.name;
+        guest = cfg.guest_os;
+    }
+
     if (!name || !vm_name_valid(name)) {
         fprintf(stderr, "vmfc: nome VM mancante o non valido\n");
         return 2;
