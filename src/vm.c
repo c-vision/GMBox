@@ -73,14 +73,46 @@ static void vm_fill_paths(vm_config *cfg, const char *bundle)
     path_join(cfg->logfile, sizeof(cfg->logfile), bundle, "vmware.log");
 }
 
+static int vm_find_in(const char *dir, const char *name, unsigned depth,
+                      char *bundle_out, size_t n)
+{
+    char want[PATH_MAX];
+    snprintf(want, sizeof(want), "%s%s", name, VMFC_BUNDLE_EXT);
+    DIR *d = opendir(dir);
+    if (!d)
+        return -1;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.')
+            continue;
+        char path[PATH_MAX];
+        path_join(path, sizeof(path), dir, e->d_name);
+        struct stat sb;
+        if (lstat(path, &sb) != 0 || S_ISLNK(sb.st_mode) || !S_ISDIR(sb.st_mode))
+            continue;
+        if (!strcmp(e->d_name, want)) {
+            snprintf(bundle_out, n, "%s", path);
+            closedir(d);
+            return 0;
+        }
+        if (depth < 16 && vm_find_in(path, name, depth + 1, bundle_out, n) == 0) {
+            closedir(d);
+            return 0;
+        }
+    }
+    closedir(d);
+    return -1;
+}
+
 int vm_find(const char *root, const char *name, char *bundle_out, size_t n)
 {
     char bundle[PATH_MAX];
     vm_bundle_path(root, name, bundle, sizeof(bundle));
-    if (!is_directory(bundle))
-        return -1;
-    snprintf(bundle_out, n, "%s", bundle);
-    return 0;
+    if (is_directory(bundle)) {
+        snprintf(bundle_out, n, "%s", bundle);
+        return 0;
+    }
+    return vm_find_in(root, name, 0, bundle_out, n);
 }
 
 static char *vmx_unquote(char *s)
@@ -217,6 +249,11 @@ int vm_load(const char *bundle, vm_config *cfg)
         cfg->shared_readonly = str_ieq(v, "TRUE");
         free(v);
     }
+    v = vmx_lookup(text, "vmfc.tags");
+    if (v) {
+        snprintf(cfg->tags, sizeof(cfg->tags), "%s", v);
+        free(v);
+    }
     free(text);
     return 0;
 }
@@ -255,11 +292,12 @@ char *vmx_find_disk(const char *vmx_path)
 
 int vm_save(const vm_config *cfg)
 {
-    char esc_name[512], esc_iso[PATH_MAX * 2], esc_drivers[PATH_MAX * 2], esc_share[PATH_MAX * 2];
+    char esc_name[512], esc_iso[PATH_MAX * 2], esc_drivers[PATH_MAX * 2], esc_share[PATH_MAX * 2], esc_tags[1024];
     vmx_escape(cfg->name, esc_name, sizeof(esc_name));
     vmx_escape(cfg->iso, esc_iso, sizeof(esc_iso));
     vmx_escape(cfg->drivers, esc_drivers, sizeof(esc_drivers));
     vmx_escape(cfg->shared_dir, esc_share, sizeof(esc_share));
+    vmx_escape(cfg->tags, esc_tags, sizeof(esc_tags));
 
     FILE *f = fopen(cfg->vmx, "wb");
     if (!f)
@@ -299,6 +337,7 @@ int vm_save(const vm_config *cfg)
     fprintf(f, "vmfc.diskSizeMiB = \"%llu\"\n", (unsigned long long)cfg->disk_mib);
     fprintf(f, "vmfc.sharedFolder = \"%s\"\n", esc_share);
     fprintf(f, "vmfc.sharedReadOnly = \"%s\"\n", cfg->shared_readonly ? "TRUE" : "FALSE");
+    fprintf(f, "vmfc.tags = \"%s\"\n", esc_tags);
     fprintf(f, "%s\n", "vmfc.graphics = \"virtio-gpu 1920x1200\"");
     int rc = fclose(f);
     return rc == 0 ? 0 : -1;
@@ -372,26 +411,43 @@ static int config_cmp(const void *a, const void *b)
     return strcasecmp(ca->name, cb->name);
 }
 
+static int vm_scan_dir(const char *dir, unsigned depth, struct list_state *st)
+{
+    DIR *d = opendir(dir);
+    if (!d)
+        return 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.')
+            continue;
+        char path[PATH_MAX];
+        path_join(path, sizeof(path), dir, e->d_name);
+        struct stat sb;
+        if (lstat(path, &sb) != 0 || S_ISLNK(sb.st_mode) || !S_ISDIR(sb.st_mode))
+            continue;
+        if (str_ends_with(e->d_name, VMFC_BUNDLE_EXT)) {
+            vm_list_cb_path(dir, path, st);
+            continue;
+        }
+        if (depth < 16)
+            vm_scan_dir(path, depth + 1, st);
+    }
+    closedir(d);
+    return 0;
+}
+
 int vm_list(const char *root, vm_list_cb cb, void *user)
 {
-    DIR *d = opendir(root);
-    if (!d) {
+    struct stat sb;
+    if (lstat(root, &sb) != 0) {
         if (errno == ENOENT)
             return 0;
         return -1;
     }
+    if (!S_ISDIR(sb.st_mode))
+        return -1;
     struct list_state st = {0};
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL) {
-        if (e->d_name[0] == '.' || !str_ends_with(e->d_name, VMFC_BUNDLE_EXT))
-            continue;
-        char bundle[PATH_MAX];
-        path_join(bundle, sizeof(bundle), root, e->d_name);
-        if (!is_directory(bundle))
-            continue;
-        vm_list_cb_path(root, bundle, &st);
-    }
-    closedir(d);
+    vm_scan_dir(root, 0, &st);
     qsort(st.items, st.count, sizeof(vm_config), config_cmp);
     for (size_t i = 0; i < st.count; i++) {
         if (cb(&st.items[i], user) != 0)
@@ -470,6 +526,8 @@ void vm_print_info(const vm_config *cfg)
     printf("CPU:         %u\n", cfg->cpus);
     printf("Memoria:     %s\n", mem);
     printf("Disco:       %llu MiB (%s)\n", (unsigned long long)cfg->disk_mib, cfg->disk);
+    if (cfg->tags[0])
+        printf("Tag:         %s\n", cfg->tags);
     printf("NVRAM:       %s\n", qemu ? vars : cfg->nvram);
     if (cfg->iso[0])
         printf("ISO:         %s%s\n", cfg->iso,

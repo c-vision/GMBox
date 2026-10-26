@@ -28,12 +28,13 @@ static void usage(FILE *out)
             "GMBox %s - macchine virtuali Windows/Linux su Apple silicon\n"
             "\n"
             "Uso:\n"
-            "  vmfc list   [--dir CARTELLA]\n"
+            "  vmfc list   [--dir CARTELLA] [--filter TESTO] [--tag TAG]\n"
             "  vmfc create NOME [opzioni]\n"
             "  vmfc start  NOME [opzioni]\n"
             "  vmfc gui    NOME [opzioni]\n"
             "  vmfc stop   NOME [--dir CARTELLA]\n"
             "  vmfc info   NOME [--dir CARTELLA]\n"
+            "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
             "  vmfc delete NOME [--dir CARTELLA] [--force]\n"
             "  vmfc import SORGENTE [opzioni]\n"
             "  vmfc tools\n"
@@ -106,29 +107,83 @@ static int make_absolute_path(const char *in, char *out, size_t n)
     return 0;
 }
 
-static int list_row(const vm_config *c, void *user)
+struct list_filter {
+    int *any;
+    const char *filter;
+    const char *tag;
+};
+
+static int contains_ci(const char *hay, const char *needle)
 {
-    int *any = user;
-    char mem[64];
-    pid_t pid;
-    format_gib(c->memory_mib, mem, sizeof(mem));
-    *any = 1;
-    printf("%-28s %-12s %2u CPU  %-8s %s\n", c->name,
-           vm_running(c, &pid) ? "in esecuzione" : "spenta",
-           c->cpus, mem, c->bundle);
+    if (!needle || !*needle)
+        return 1;
+    if (!hay)
+        return 0;
+    size_t n = strlen(needle);
+    for (const char *p = hay; *p; p++)
+        if (!strncasecmp(p, needle, n))
+            return 1;
     return 0;
 }
 
-static int cmd_list(const char *root)
+static int has_tag(const char *tags, const char *want)
+{
+    if (!want || !*want)
+        return 1;
+    const char *p = tags;
+    while (p && *p) {
+        while (*p == ' ' || *p == ',') p++;
+        const char *e = p;
+        while (*e && *e != ',') e++;
+        size_t n = (size_t)(e - p);
+        while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+        if (n == strlen(want) && !strncasecmp(p, want, n))
+            return 1;
+        p = *e ? e + 1 : e;
+    }
+    return 0;
+}
+
+static int list_row(const vm_config *c, void *user)
+{
+    struct list_filter *f = user;
+    if (!contains_ci(c->name, f->filter) && !contains_ci(c->bundle, f->filter) &&
+        !contains_ci(c->guest_os, f->filter) && !contains_ci(c->tags, f->filter))
+        return 0;
+    if (!has_tag(c->tags, f->tag))
+        return 0;
+    char mem[64], disk[64], last[32] = "-";
+    pid_t pid;
+    struct stat sb;
+    format_gib(c->memory_mib, mem, sizeof(mem));
+    format_gib(c->disk_mib, disk, sizeof(disk));
+    if (stat(c->logfile, &sb) == 0) {
+        struct tm tmv;
+        if (localtime_r(&sb.st_mtime, &tmv))
+            strftime(last, sizeof(last), "%Y-%m-%d %H:%M", &tmv);
+    }
+    *f->any = 1;
+    printf("%-28s %-14s %2u CPU  %-8s %-8s %-16s %s%s%s\n", c->name,
+           vm_running(c, &pid) ? "in esecuzione" : "spenta",
+           c->cpus, mem, disk, last, c->bundle,
+           c->tags[0] ? "  tag=" : "", c->tags);
+    return 0;
+}
+
+static int cmd_list(const char *root, const char *filter, const char *tag)
 {
     int any = 0;
-    if (vm_list(root, list_row, &any) != 0) {
+    struct list_filter f = { &any, filter, tag };
+    if (vm_list(root, list_row, &f) != 0) {
         fprintf(stderr, "vmfc: impossibile leggere %s\n", root);
         return 1;
     }
     if (!any) {
         printf("Nessuna macchina virtuale in %s\n", root);
-        printf("Crea la prima con: vmfc create \"Windows 11\" --iso /percorso/Windows11.iso --start\n");
+        if (filter || tag)
+            printf("Nessun risultato per i filtri richiesti.\n");
+        else
+            printf("Crea la prima con: vmfc create \"Windows 11\" --iso /percorso/Windows11.iso --start\n");
     }
     return 0;
 }
@@ -822,6 +877,8 @@ int main(int argc, char **argv)
     int rest_argc = argc - 2;
     char **rest = argv + 2;
     const char *dir = NULL;
+    const char *filter = NULL;
+    const char *tag = NULL;
     for (int i = 0; i < rest_argc; i++) {
         if (!strcmp(rest[i], "--dir")) {
             if (i + 1 >= rest_argc) {
@@ -829,13 +886,25 @@ int main(int argc, char **argv)
                 return 2;
             }
             dir = rest[i + 1];
+        } else if (!strcmp(rest[i], "--filter")) {
+            if (i + 1 >= rest_argc) {
+                fprintf(stderr, "vmfc: --filter senza valore\n");
+                return 2;
+            }
+            filter = rest[i + 1];
+        } else if (!strcmp(rest[i], "--tag")) {
+            if (i + 1 >= rest_argc) {
+                fprintf(stderr, "vmfc: --tag senza valore\n");
+                return 2;
+            }
+            tag = rest[i + 1];
         }
     }
     if (dir)
         snprintf(root, sizeof(root), "%s", dir);
 
     if (!strcmp(cmd, "list"))
-        return cmd_list(root);
+        return cmd_list(root, filter, tag);
     if (!strcmp(cmd, "import"))
         return cmd_import(rest_argc, rest, root);
     if (!strcmp(cmd, "tools"))
@@ -880,6 +949,31 @@ int main(int argc, char **argv)
             return 2;
         }
         return cmd_delete(root, name, force);
+    }
+    if (!strcmp(cmd, "tag")) {
+        const char *name = NULL;
+        char tags[256] = "";
+        for (int i = 0; i < rest_argc; i++) {
+            if (!strcmp(rest[i], "--dir")) { i++; continue; }
+            if (rest[i][0] != '-' && !name) { name = rest[i]; continue; }
+            if (rest[i][0] == '-') continue;
+            if (tags[0]) strncat(tags, ",", sizeof(tags) - strlen(tags) - 1);
+            strncat(tags, rest[i], sizeof(tags) - strlen(tags) - 1);
+        }
+        if (!name) {
+            fprintf(stderr, "vmfc: specifica il nome della VM\n");
+            return 2;
+        }
+        vm_config cfg;
+        if (load_vm(root, name, &cfg) != 0)
+            return 1;
+        snprintf(cfg.tags, sizeof(cfg.tags), "%s", tags);
+        if (vm_save(&cfg) != 0) {
+            fprintf(stderr, "vmfc: salvataggio tag fallito\n");
+            return 1;
+        }
+        printf("Tag di \"%s\": %s\n", cfg.name, cfg.tags[0] ? cfg.tags : "(nessuno)");
+        return 0;
     }
     if (!strcmp(cmd, "info")) {
         const char *name = NULL;
