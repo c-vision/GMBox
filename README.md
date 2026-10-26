@@ -44,6 +44,23 @@ Keyboard/mouse input: write commands to the FIFO (`key space`, `type text`, `key
 Useful variables: `GMBOX_FW`, `GMBOX_VARS`, `GMBOX_DISK`, `GMBOX_NVME_LOG`, `GMBOX_USBLOG`,
 `GMBOX_KDBRK` (prints the drivers loaded by the Windows kernel), `GMBOX_NO_USB`.
 
+## VM CLI
+
+```sh
+vmfc create --wizard                 # guided VM creation
+vmfc list --filter windows --tag work
+vmfc tag "Windows 11 Pro" lavoro
+vmfc status "Windows 11 Pro"
+vmfc pause "Windows 11 Pro"
+vmfc resume "Windows 11 Pro"
+vmfc reboot "Windows 11 Pro"
+vmfc stop "Windows 11 Pro" --force
+```
+
+The VM library scans subfolders, shows status, disk/RAM, last start and tags. Tags are stored in
+`config.vmx` (`vmfc.tags`). Pause, resume, status and reboot use QEMU QMP when available; VZ guests
+accept pause/resume through `SIGUSR1`/`SIGUSR2`.
+
 ## Current limitations
 
 - The native VMM is a **prototype**: firmware, VARS and disk paths are still partly hard-coded.
@@ -54,7 +71,6 @@ Useful variables: `GMBOX_FW`, `GMBOX_VARS`, `GMBOX_DISK`, `GMBOX_NVME_LOG`, `GMB
 - Minimal ACPI (no IORT/DBG2), PCIe without MSI-X, relative mouse only (no absolute pointer).
 - If the disk carries failed boots, Windows shows the *Recovery* screen: `GMBOX_AUTOENTER=1` is needed.
 - Windows guests on VZ are unsupported (iBoot/NVRAM bug); installing from ISO in the native VMM is untested.
-- `vmfc list` does not descend into subfolders; there is no VM library or creation wizard yet.
 
 ## Layout
 
