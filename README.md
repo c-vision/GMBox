@@ -55,7 +55,13 @@ vmfc pause "Windows 11 Pro"
 vmfc resume "Windows 11 Pro"
 vmfc reboot "Windows 11 Pro"
 vmfc stop "Windows 11 Pro" --force
+vmfc autostart "Windows 11 Pro"        # start at login
+vmfc autostart "Windows 11 Pro" --status
+vmfc autostart "Windows 11 Pro" --disable
 ```
+
+`vmfc autostart` writes a per-VM LaunchAgent under `~/Library/LaunchAgents` and loads it in the
+current Aqua session; `--dry-run` prints the plist without changing the system.
 
 The VM library scans subfolders, shows status, disk/RAM, last start and tags. Tags are stored in
 `config.vmx` (`vmfc.tags`). Pause, resume, status and reboot use QEMU QMP when available; VZ guests
