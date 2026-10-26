@@ -1120,6 +1120,7 @@ static int cmd_autostart(const char *root, const char *name, int disable,
              "<string>--dir</string><string>%s</string></array>\n"
              "  <key>RunAtLoad</key><true/>\n"
              "  <key>LimitLoadToSessionType</key><string>Aqua</string>\n"
+             "  <key>ExitTimeOut</key><integer>30</integer>\n"
              "  <key>StandardOutPath</key><string>%s</string>\n"
              "  <key>StandardErrorPath</key><string>%s</string>\n"
              "</dict></plist>\n",

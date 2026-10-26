@@ -61,7 +61,8 @@ vmfc autostart "Windows 11 Pro" --disable
 ```
 
 `vmfc autostart` writes a per-VM LaunchAgent under `~/Library/LaunchAgents` and loads it in the
-current Aqua session; `--dry-run` prints the plist without changing the system.
+current Aqua session; `--dry-run` prints the plist without changing the system. The agent gives the
+VM 30 seconds to shut down cleanly at logout.
 
 The VM library scans subfolders, shows status, disk/RAM, last start and tags. Tags are stored in
 `config.vmx` (`vmfc.tags`). Pause, resume, status and reboot use QEMU QMP when available; VZ guests
