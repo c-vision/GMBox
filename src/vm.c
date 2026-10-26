@@ -471,6 +471,8 @@ int vm_running(const vm_config *cfg, pid_t *pid_out)
             *pid_out = pid;
         return 1;
     }
+    if (errno == ESRCH)
+        unlink(cfg->pidfile);
     return 0;
 }
 

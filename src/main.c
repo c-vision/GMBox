@@ -40,6 +40,7 @@ static void usage(FILE *out)
             "  vmfc reboot NOME [--dir CARTELLA]\n"
             "  vmfc status NOME [--dir CARTELLA]\n"
             "  vmfc info   NOME [--dir CARTELLA]\n"
+            "  vmfc check  NOME [--fix] [--dir CARTELLA]\n"
             "  vmfc iso    NOME [FILE|--none] [--dir CARTELLA]\n"
             "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
             "  vmfc disk    NOME [--dir CARTELLA]\n"
@@ -1321,6 +1322,51 @@ static int cmd_compact(const char *root, const char *name)
     return failed ? 1 : 0;
 }
 
+static int cmd_check(const char *root, const char *name, int fix)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    int issues = 0;
+    struct stat sb;
+    if (stat(cfg.disk, &sb) != 0) {
+        fprintf(stderr, "vmfc: disco mancante: %s\n", cfg.disk);
+        issues++;
+    } else {
+        off_t expected = (off_t)(cfg.disk_mib * 1024ULL * 1024ULL);
+        if (sb.st_size < expected) {
+            fprintf(stderr, "vmfc: disco piu' piccolo del previsto: %lld < %lld byte\n",
+                    (long long)sb.st_size, (long long)expected);
+            issues++;
+        }
+    }
+    pid_t pid;
+    if (vm_running(&cfg, &pid)) {
+        printf("Stato:      in esecuzione (pid %ld)\n", (long)pid);
+    } else {
+        printf("Stato:      spenta\n");
+        if (fix && path_exists(cfg.pidfile)) {
+            unlink(cfg.pidfile);
+            printf("Ripulito:   pid file obsoleto\n");
+        }
+        if (fix) {
+            char state[PATH_MAX];
+            snprintf(state, sizeof(state), "%s/vmfc.state", cfg.bundle);
+            if (path_exists(state)) {
+                unlink(state);
+                printf("Ripulito:   stato obsoleto\n");
+            }
+        }
+    }
+    char vars[PATH_MAX], nvram[PATH_MAX];
+    snprintf(vars, sizeof(vars), "%s/vars.fd", cfg.bundle);
+    snprintf(nvram, sizeof(nvram), "%s/nvram.bin", cfg.bundle);
+    if (!path_exists(vars) && !path_exists(nvram))
+        printf("Nota:       NVRAM assente (verra' creata al primo avvio)\n");
+    printf("%s: %s\n", cfg.name, issues ? "problemi rilevati" : "OK");
+    return issues ? 1 : 0;
+}
+
 static int cmd_iso(const char *root, const char *name, const char *file, int eject)
 {
     vm_config cfg;
@@ -1533,6 +1579,20 @@ int main(int argc, char **argv)
             return 2;
         }
         return cmd_clone(root, src_name, dst_name);
+    }
+    if (!strcmp(cmd, "check")) {
+        const char *name = NULL;
+        int fix = 0;
+        for (int i = 0; i < rest_argc; i++) {
+            if (!strcmp(rest[i], "--dir")) { i++; continue; }
+            if (!strcmp(rest[i], "--fix")) { fix = 1; continue; }
+            if (rest[i][0] != '-' && !name) name = rest[i];
+        }
+        if (!name) {
+            fprintf(stderr, "vmfc: specifica il nome della VM\n");
+            return 2;
+        }
+        return cmd_check(root, name, fix);
     }
     if (!strcmp(cmd, "iso")) {
         const char *name = NULL, *file = NULL;
