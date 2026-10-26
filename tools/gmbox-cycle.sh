@@ -23,7 +23,8 @@ for i in $(seq 1 "$N"); do
     [ -f "$W/screen.bmp" ] && st=$("$W/fbstat" "$W/screen.bmp" 2>/dev/null) || st="0 0"
     cw=${st% *}; lum=${st#* }
     if [ -z "$tl" ] && [ "$(echo "$cw > 0.2" | bc)" = 1 ] && [ "$lum" -lt 100 ]; then tl=$(el "$t0"); break; fi
-    [ "$(perl -e "print $(el "$t0")>150?1:0")" = 1 ] && { res=timeout-lock; break; }
+    lim=150; [ "$i" = 1 ] && lim=300   # first cycle after an unclean stop may go through Windows repair
+    [ "$(perl -e "print $(el "$t0")>$lim?1:0")" = 1 ] && { res=timeout-lock; break; }
     sleep 0.5
   done
   if [ "$res" = ok ]; then
@@ -42,7 +43,7 @@ for i in $(seq 1 "$N"); do
     [ "$i" = 1 ] && { printf 'key win+r\nwait 1500\ntype cmd /c powercfg /h off\nwait 300\nkey enter\nwait 4000\n' > "$fifo"; sleep 8; }
     ts0=$(now)
     printf 'key win+r\nwait 1500\ntype shutdown /s /f /t 0\nwait 300\nkey enter\n' > "$fifo"
-    k=0; while kill -0 $pid 2>/dev/null && [ $k -lt 240 ]; do sleep 0.5; k=$((k+1)); done
+    k=0; while kill -0 $pid 2>/dev/null && [ $k -lt 240 ]; do sleep 0.5; k=$((k+1)); [ $k = 40 ] && echo "key enter" > "$fifo"; done
     if kill -0 $pid 2>/dev/null; then res=timeout-shutdown; kill $pid 2>/dev/null; fi
     wait $pid; rc=$?
     ts=$(el "$ts0")

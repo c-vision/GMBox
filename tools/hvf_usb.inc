@@ -257,7 +257,8 @@ static void kbd_press(uint8_t mod, int key)
     uint8_t r[8] = { mod, 0, (uint8_t)key, 0, 0, 0, 0, 0 };
     uint8_t z[8] = { 0 };
     if (key >= 0xe0 && key <= 0xe7) { r[0] |= (uint8_t)(1 << (key - 0xe0)); r[2] = 0; }
-    q_push(d, r);
+    /* hold the key for several polls so the host driver never misses a short tap */
+    q_push(d, r); q_push(d, r); q_push(d, r); q_push(d, r);
     q_push(d, z);
 }
 
