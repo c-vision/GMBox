@@ -13,6 +13,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/clonefile.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -39,6 +40,7 @@ static void usage(FILE *out)
             "  vmfc status NOME [--dir CARTELLA]\n"
             "  vmfc info   NOME [--dir CARTELLA]\n"
             "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
+            "  vmfc clone  SORGENTE NUOVO [--dir CARTELLA]\n"
             "  vmfc delete NOME [--dir CARTELLA] [--force]\n"
             "  vmfc import SORGENTE [opzioni]\n"
             "  vmfc autostart NOME [--disable|--status] [--dry-run] [--dir CARTELLA]\n"
@@ -1153,6 +1155,85 @@ static int cmd_autostart(const char *root, const char *name, int disable,
     return 0;
 }
 
+static int clone_or_copy(const char *src, const char *dst)
+{
+    unlink(dst);
+    if (clonefile(src, dst, 0) == 0)
+        return 0;
+    return copy_file(src, dst);
+}
+
+static int cmd_clone(const char *root, const char *src_name, const char *dst_name)
+{
+    if (!vm_name_valid(dst_name)) {
+        fprintf(stderr, "vmfc: nome VM non valido\n");
+        return 2;
+    }
+    vm_config src;
+    if (load_vm(root, src_name, &src) != 0)
+        return 1;
+    pid_t pid;
+    if (vm_running(&src, &pid)) {
+        fprintf(stderr, "vmfc: la VM sorgente e' in esecuzione (pid %ld)\n", (long)pid);
+        return 1;
+    }
+    if (!path_exists(src.disk)) {
+        fprintf(stderr, "vmfc: disco sorgente mancante: %s\n", src.disk);
+        return 1;
+    }
+
+    vm_config dst;
+    vm_config_init(&dst);
+    uint64_t memory = src.memory_mib, disk = src.disk_mib;
+    uint32_t cpus = src.cpus;
+    int readonly = src.shared_readonly;
+    dst.memory_mib = memory;
+    dst.disk_mib = disk;
+    dst.cpus = cpus;
+    dst.shared_readonly = readonly;
+    snprintf(dst.guest_os, sizeof(dst.guest_os), "%s", src.guest_os);
+    snprintf(dst.iso, sizeof(dst.iso), "%s", src.iso);
+    snprintf(dst.drivers, sizeof(dst.drivers), "%s", src.drivers);
+    snprintf(dst.shared_dir, sizeof(dst.shared_dir), "%s", src.shared_dir);
+    snprintf(dst.tags, sizeof(dst.tags), "%s", src.tags);
+    snprintf(dst.name, sizeof(dst.name), "%s", dst_name);
+    snprintf(dst.root, sizeof(dst.root), "%s", root);
+    vm_bundle_path(root, dst_name, dst.bundle, sizeof(dst.bundle));
+
+    if (path_exists(dst.bundle)) {
+        fprintf(stderr, "vmfc: la VM \"%s\" esiste gia'\n", dst_name);
+        return 1;
+    }
+    if (vm_create(&dst) != 0)
+        return 1;
+
+    if (clone_or_copy(src.disk, dst.disk) != 0) {
+        fprintf(stderr, "vmfc: copia del disco non riuscita\n");
+        rm_rf(dst.bundle);
+        return 1;
+    }
+    const char *copy_names[] = { "vars.fd", "nvram.bin" };
+    for (size_t i = 0; i < sizeof(copy_names) / sizeof(copy_names[0]); i++) {
+        char from[PATH_MAX], to[PATH_MAX];
+        path_join(from, sizeof(from), src.bundle, copy_names[i]);
+        path_join(to, sizeof(to), dst.bundle, copy_names[i]);
+        if (path_exists(from) && clone_or_copy(from, to) != 0) {
+            fprintf(stderr, "vmfc: copia di %s non riuscita\n", copy_names[i]);
+            rm_rf(dst.bundle);
+            return 1;
+        }
+    }
+
+    char mem[64], disk_size[64];
+    format_gib(dst.memory_mib, mem, sizeof(mem));
+    format_gib(dst.disk_mib, disk_size, sizeof(disk_size));
+    printf("Clonata \"%s\" in \"%s\"\n", src.name, dst.name);
+    printf("  bundle: %s\n", dst.bundle);
+    printf("  disco:  %s (%s, %s RAM)\n", dst.disk, disk_size, mem);
+    printf("  UUID:   %s\n", dst.uuid);
+    return 0;
+}
+
 static int cmd_delete(const char *root, const char *name, int force)
 {
     vm_config cfg;
@@ -1304,6 +1385,19 @@ int main(int argc, char **argv)
             return 2;
         }
         return cmd_delete(root, name, force);
+    }
+    if (!strcmp(cmd, "clone")) {
+        const char *src_name = NULL, *dst_name = NULL;
+        for (int i = 0; i < rest_argc; i++) {
+            if (!strcmp(rest[i], "--dir")) { i++; continue; }
+            if (rest[i][0] != '-' && !src_name) { src_name = rest[i]; continue; }
+            if (rest[i][0] != '-' && !dst_name) { dst_name = rest[i]; continue; }
+        }
+        if (!src_name || !dst_name) {
+            fprintf(stderr, "vmfc: specifica VM sorgente e nuovo nome\n");
+            return 2;
+        }
+        return cmd_clone(root, src_name, dst_name);
     }
     if (!strcmp(cmd, "autostart")) {
         const char *name = NULL;
