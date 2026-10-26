@@ -33,7 +33,6 @@ typedef struct vm_config {
     char uuid[48];
     char guest_os[64];
     char tags[256];
-    char port_forward[512];
 } vm_config;
 
 typedef int (*vm_list_cb)(const vm_config *cfg, void *user);

@@ -54,8 +54,6 @@ vmfc compact "Windows 11 Pro"          # VM stopped
 vmfc iso "Windows 11 Pro" /path/to/install.iso
 vmfc iso "Windows 11 Pro" --none
 vmfc check "Windows 11 Pro" --fix
-vmfc port "Windows 11 Pro" --add tcp:2222:22
-vmfc port "Windows 11 Pro" --remove tcp:2222:22
 vmfc list --filter windows --tag work
 vmfc tag "Windows 11 Pro" lavoro
 vmfc status "Windows 11 Pro"
