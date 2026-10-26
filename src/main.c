@@ -40,6 +40,7 @@ static void usage(FILE *out)
             "  vmfc reboot NOME [--dir CARTELLA]\n"
             "  vmfc status NOME [--dir CARTELLA]\n"
             "  vmfc info   NOME [--dir CARTELLA]\n"
+            "  vmfc iso    NOME [FILE|--none] [--dir CARTELLA]\n"
             "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
             "  vmfc disk    NOME [--dir CARTELLA]\n"
             "  vmfc compact NOME [--dir CARTELLA]\n"
@@ -1320,6 +1321,42 @@ static int cmd_compact(const char *root, const char *name)
     return failed ? 1 : 0;
 }
 
+static int cmd_iso(const char *root, const char *name, const char *file, int eject)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    pid_t pid;
+    if (vm_running(&cfg, &pid)) {
+        fprintf(stderr, "vmfc: la VM e' in esecuzione (pid %ld); arrestala prima\n", (long)pid);
+        return 1;
+    }
+    if (eject || !file) {
+        if (eject)
+            cfg.iso[0] = 0;
+        if (!eject) {
+            printf("ISO di \"%s\": %s\n", cfg.name,
+                   cfg.iso[0] ? cfg.iso : "(nessuna)");
+            return 0;
+        }
+    } else {
+        if (make_absolute_path(file, cfg.iso, sizeof(cfg.iso)) != 0) {
+            fprintf(stderr, "vmfc: percorso ISO non valido: %s\n", file);
+            return 2;
+        }
+        if (!path_exists(cfg.iso)) {
+            fprintf(stderr, "vmfc: file ISO non trovato: %s\n", cfg.iso);
+            return 2;
+        }
+    }
+    if (vm_save(&cfg) != 0) {
+        fprintf(stderr, "vmfc: salvataggio configurazione fallito\n");
+        return 1;
+    }
+    printf("ISO di \"%s\": %s\n", cfg.name, cfg.iso[0] ? cfg.iso : "(nessuna)");
+    return 0;
+}
+
 static int cmd_delete(const char *root, const char *name, int force)
 {
     vm_config cfg;
@@ -1496,6 +1533,21 @@ int main(int argc, char **argv)
             return 2;
         }
         return cmd_clone(root, src_name, dst_name);
+    }
+    if (!strcmp(cmd, "iso")) {
+        const char *name = NULL, *file = NULL;
+        int eject = 0;
+        for (int i = 0; i < rest_argc; i++) {
+            if (!strcmp(rest[i], "--dir")) { i++; continue; }
+            if (!strcmp(rest[i], "--none") || !strcmp(rest[i], "--eject")) { eject = 1; continue; }
+            if (rest[i][0] != '-' && !name) { name = rest[i]; continue; }
+            if (rest[i][0] != '-' && !file) { file = rest[i]; continue; }
+        }
+        if (!name) {
+            fprintf(stderr, "vmfc: specifica il nome della VM\n");
+            return 2;
+        }
+        return cmd_iso(root, name, file, eject);
     }
     if (!strcmp(cmd, "autostart")) {
         const char *name = NULL;

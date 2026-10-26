@@ -51,6 +51,8 @@ vmfc create --wizard                 # guided VM creation
 vmfc clone "Windows 11 Pro" "Windows Lab"
 vmfc disk "Windows 11 Pro"
 vmfc compact "Windows 11 Pro"          # VM stopped
+vmfc iso "Windows 11 Pro" /path/to/install.iso
+vmfc iso "Windows 11 Pro" --none
 vmfc list --filter windows --tag work
 vmfc tag "Windows 11 Pro" lavoro
 vmfc status "Windows 11 Pro"
