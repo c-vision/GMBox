@@ -27,16 +27,17 @@ make acpi       # regenerate the ACPI tables (needs iasl)
 make hvf-win    # native Windows VMM (build/hvf_win)
 ```
 
-Example (use **a copy** of the disk: Windows writes to it):
+Example (keep VMs under `~/Documents/Virtual Machines/`; Windows writes to the disk, so work on a copy kept in the same VM folder and delete it afterwards):
 
 ```sh
-cp -c "vms/Windows 11 Pro.vmfc/disk.raw" /tmp/d.raw
-cp -c "vms/Windows 11 Pro.vmfc/vars.fd"  /tmp/v.fd
-mkfifo /tmp/in.fifo
-GMBOX_INPUT=/tmp/in.fifo GMBOX_AUTOENTER=1 GMBOX_REBOOT_ON_OFF=1 \
-GMBOX_FB_DUMP=/tmp/s.bmp GMBOX_FB_INTERVAL=10 \
-GMBOX_DISK=/tmp/d.raw GMBOX_VARS=/tmp/v.fd GMBOX_WATCHDOG_SEC=900 build/hvf_win
+VM="$HOME/Documents/Virtual Machines/Windows 11 Pro/Windows 11 Pro GMBox/Windows 11 Pro.vmfc"
+mkfifo "$VM/in.fifo"
+GMBOX_INPUT="$VM/in.fifo" GMBOX_AUTOENTER=1 GMBOX_REBOOT_ON_OFF=1 \
+GMBOX_FB_DUMP="$VM/screen.bmp" GMBOX_FB_INTERVAL=10 \
+GMBOX_DISK="$VM/disk.raw" GMBOX_VARS="$VM/vars.fd" GMBOX_WATCHDOG_SEC=900 build/hvf_win
 ```
+
+The defaults of `hvf_win` point at that same VM folder, so `GMBOX_DISK`/`GMBOX_VARS` can be omitted.
 
 Keyboard/mouse input: write commands to the FIFO (`key space`, `type text`, `key enter`,
 `move dx dy`, `click l`, …). Read the screen from the BMP (`sips -s format png s.bmp --out s.png`).

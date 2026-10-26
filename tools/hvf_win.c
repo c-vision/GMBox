@@ -47,8 +47,8 @@
 #define NVME_INTID  36u /* GIC SPI 4: DTB interrupt-map slot 1 INTA */
 
 #define FW_PATH     "/Users/gaetano/Documents/Projects/GMBox/tools/firmware/edk2-aarch64-gmbox-pci2-boot-code.fd"
-#define VARS_PATH   "/Users/gaetano/Documents/Projects/GMBox/vms/Windows 11 Pro.vmfc/vars.fd"
-#define DISK_PATH   "/Users/gaetano/Documents/Projects/GMBox/vms/Windows 11 Pro.vmfc/disk.raw"
+#define VARS_PATH   "/Users/gaetano/Documents/Virtual Machines/Windows 11 Pro/Windows 11 Pro GMBox/Windows 11 Pro.vmfc/vars.fd"
+#define DISK_PATH   "/Users/gaetano/Documents/Virtual Machines/Windows 11 Pro/Windows 11 Pro GMBox/Windows 11 Pro.vmfc/disk.raw"
 #define DTB_PATH    "/Users/gaetano/Documents/Projects/GMBox/tools/qemu-virt-nvme-gic3-flash.dtb"
 
 #define NVME_QMAX   16

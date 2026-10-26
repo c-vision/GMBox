@@ -4,7 +4,7 @@
 It boots `tools/firmware/edk2-aarch64-gmbox-pci1-code.fd` with
 `tools/qemu-virt-nvme-gic3-flash.dtb`, emulates GICv3
 redistributor/UART/RTC/PCIe ECAM and a full NVMe controller backed by
-`vms/Windows 11 Pro.vmfc/disk.raw`.
+`~/Documents/Virtual Machines/Windows 11 Pro/Windows 11 Pro GMBox/Windows 11 Pro.vmfc/disk.raw`.
 
 ## Build / run
 
