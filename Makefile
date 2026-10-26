@@ -33,7 +33,6 @@ smoke: all
 	@rm -rf /tmp/vmfc-smoke
 	./$(CLI) create "Smoke Test" --dir /tmp/vmfc-smoke --memory 2048M --disk 2G
 	./$(CLI) list --dir /tmp/vmfc-smoke
-	./$(CLI) start "Smoke Test" --dir /tmp/vmfc-smoke --headless --seconds 5
 
 hvf-probe:
 	@mkdir -p build

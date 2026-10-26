@@ -71,9 +71,9 @@ current Aqua session; `--dry-run` prints the plist without changing the system. 
 VM 30 seconds to shut down cleanly at logout.
 
 The VM library scans subfolders, shows status, disk/RAM, last start and tags. Tags are stored in
-`config.vmx` (`vmfc.tags`). Pause, resume, status and reboot use QEMU QMP when available; VZ guests
-accept pause/resume through `SIGUSR1`/`SIGUSR2` and reboot through a graceful stop/start. VZ status is
-also recorded in `vmfc.state`.
+`config.vmx` (`vmfc.tags`). VZ guests accept pause/resume through `SIGUSR1`/`SIGUSR2`, reboot through
+a graceful stop/start, and record status in `vmfc.state`. Windows uses the native
+`build/hvf_win` runner, not `vmfc start`.
 
 ## Current limitations
 

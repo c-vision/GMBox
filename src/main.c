@@ -3,7 +3,6 @@
 #include "util.h"
 #include "vmdk.h"
 #include "vz.h"
-#include "qemu.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -70,7 +69,6 @@ static void usage(FILE *out)
             "  --iso PERCORSO    imposta la ISO prima dell'avvio\n"
             "  --drivers PERCORSO imposta la ISO driver prima dell'avvio\n"
             "  --no-drivers      scollega la seconda ISO\n"
-            "  --engine vz|qemu  forza il motore (default: QEMU/HVF per Windows, VZ per Linux)\n"
             "  --dir CARTELLA    cartella delle VM\n"
             "\n"
             "Opzioni di import (VMware .vmwarevm, .vmx o .vmdk):\n"
@@ -83,8 +81,8 @@ static void usage(FILE *out)
             "  --dry-run         analizza la sorgente senza convertire\n"
             "\n"
             "Le VM Windows richiedono Windows 11 ARM64. Il disco e' un file raw sparso\n"
-            "collegato come NVMe. Windows usa QEMU/HVF (qemu-system-aarch64 + EDK2),\n"
-            "Linux usa VZ/Virtualization.framework; --engine forza la scelta.\n",
+            "collegato come NVMe. Linux usa VZ/Virtualization.framework; Windows usa\n"
+            "il VMM nativo build/hvf_win, non il comando vmfc start.\n",
             VMFC_VERSION, VMFC_DEFAULT_CPUS, VMFC_DEFAULT_GUEST);
 }
 
@@ -406,10 +404,9 @@ static int cmd_create(int argc, char **argv, const char *root)
         printf("  driver: %s\n", cfg.drivers);
     printf("\nAvvio:  vmfc start \"%s\" --dir \"%s\"\n", cfg.name, root);
     if (vm_guest_is_windows(&cfg))
-        printf("Nota:   serve Windows 11 ARM64 (ISO ufficiale Microsoft); "
-               "QEMU richiede EDK2 e, per la ISO, VMFC_QEMU_ISO=1.\n");
+        printf("Nota:   per Windows usa il VMM nativo build/hvf_win (vedi README).\n");
     else
-        printf("Nota:   guest Linux: usa VZ; nessuna dipendenza QEMU.\n");
+        printf("Nota:   guest Linux: usa VZ.\n");
 
     if (start_now) {
         char *start_argv[4] = {(char *)"start", cfg.name, (char *)"--dir", (char *)root};
@@ -432,7 +429,7 @@ static int load_vm(const char *root, const char *name, vm_config *cfg)
     return 0;
 }
 
-static int start_vm(vm_config *cfg, int headless, int seconds, const char *engine)
+static int start_vm(vm_config *cfg, int headless, int seconds)
 {
     pid_t pid;
     if (vm_running(cfg, &pid)) {
@@ -444,22 +441,12 @@ static int start_vm(vm_config *cfg, int headless, int seconds, const char *engin
         return 1;
     }
 
-    int use_qemu;
-    if (engine) {
-        if (strcmp(engine, "qemu") == 0) {
-            use_qemu = 1;
-        } else if (strcmp(engine, "vz") == 0) {
-            use_qemu = 0;
-        } else {
-            fprintf(stderr, "vmfc: motore sconosciuto \"%s\" (usa vz o qemu)\n", engine);
-            return 2;
-        }
-    } else {
-        use_qemu = vm_guest_is_windows(cfg);
+    if (vm_guest_is_windows(cfg)) {
+        fprintf(stderr,
+                "vmfc: QEMU e' stato rimosso. Per Windows 11 ARM64 usa il VMM nativo:\n"
+                "      build/hvf_win (vedi README, sezione Build and run).\n");
+        return 1;
     }
-
-    if (use_qemu)
-        return qemu_run(cfg, headless, seconds);
     return vz_run(cfg, headless, seconds);
 }
 
@@ -468,7 +455,6 @@ static int cmd_start(int argc, char **argv, const char *root)
     const char *name = NULL;
     const char *iso = NULL;
     const char *drivers = NULL;
-    const char *engine = NULL;
     int no_drivers = 0;
     int headless = 0;
     int seconds = 0;
@@ -493,8 +479,6 @@ static int cmd_start(int argc, char **argv, const char *root)
             drivers = arg_value(argc, argv, "--drivers", &i, &err);
         } else if (!strcmp(argv[i], "--no-drivers")) {
             no_drivers = 1;
-        } else if (!strcmp(argv[i], "--engine")) {
-            engine = arg_value(argc, argv, "--engine", &i, &err);
         } else if (!strcmp(argv[i], "--dir")) {
             root = arg_value(argc, argv, "--dir", &i, &err);
         } else if (argv[i][0] == '-') {
@@ -535,7 +519,7 @@ static int cmd_start(int argc, char **argv, const char *root)
             vm_save(&cfg);
         }
     }
-    return start_vm(&cfg, headless, seconds, engine);
+    return start_vm(&cfg, headless, seconds);
 }
 
 static int find_vmx_in_dir(const char *dir, char *out, size_t n)
@@ -900,16 +884,10 @@ static int cmd_stop(const char *root, const char *name, int force)
         printf("VM arrestata con forza.\n");
         return 0;
     }
-    int acpi = 0;
-    if (vm_guest_is_windows(&cfg) && qemu_request_powerdown(&cfg) == 0) {
-        acpi = 1;
-        printf("Richiesta ACPI di spegnimento a \"%s\" (pid %ld)...\n", name, (long)pid);
-    } else {
-        printf("Richiesta di spegnimento a \"%s\" (pid %ld)...\n", name, (long)pid);
-        if (kill(pid, SIGTERM) != 0) {
-            fprintf(stderr, "vmfc: impossibile inviare SIGTERM: %s\n", strerror(errno));
-            return 1;
-        }
+    printf("Richiesta di spegnimento a \"%s\" (pid %ld)...\n", name, (long)pid);
+    if (kill(pid, SIGTERM) != 0) {
+        fprintf(stderr, "vmfc: impossibile inviare SIGTERM: %s\n", strerror(errno));
+        return 1;
     }
     for (int i = 0; i < 150; i++) {
         if (kill(pid, 0) != 0 && errno == ESRCH) {
@@ -917,17 +895,6 @@ static int cmd_stop(const char *root, const char *name, int force)
             return 0;
         }
         usleep(200000);
-    }
-    if (acpi) {
-        fprintf(stderr, "vmfc: il guest non risponde allo spegnimento ACPI, invio SIGTERM\n");
-        kill(pid, SIGTERM);
-        for (int i = 0; i < 25; i++) {
-            if (kill(pid, 0) != 0 && errno == ESRCH) {
-                printf("VM arrestata.\n");
-                return 0;
-            }
-            usleep(200000);
-        }
     }
     fprintf(stderr, "vmfc: il guest non risponde, forzo l'arresto\n");
     kill(pid, SIGKILL);
@@ -946,11 +913,9 @@ static int cmd_pause(const char *root, const char *name)
         fprintf(stderr, "vmfc: la VM \"%s\" e' spenta\n", name);
         return 1;
     }
-    if (qemu_request_pause(&cfg) != 0) {
-        if (vm_guest_is_windows(&cfg) || kill(pid, SIGUSR1) != 0) {
-            fprintf(stderr, "vmfc: pausa non disponibile per questo backend\n");
-            return 1;
-        }
+    if (vm_guest_is_windows(&cfg) || kill(pid, SIGUSR1) != 0) {
+        fprintf(stderr, "vmfc: pausa non disponibile per questo backend\n");
+        return 1;
     }
     printf("VM \"%s\" in pausa.\n", name);
     return 0;
@@ -966,11 +931,9 @@ static int cmd_resume(const char *root, const char *name)
         fprintf(stderr, "vmfc: la VM \"%s\" e' spenta\n", name);
         return 1;
     }
-    if (qemu_request_resume(&cfg) != 0) {
-        if (vm_guest_is_windows(&cfg) || kill(pid, SIGUSR2) != 0) {
-            fprintf(stderr, "vmfc: ripresa non disponibile per questo backend\n");
-            return 1;
-        }
+    if (vm_guest_is_windows(&cfg) || kill(pid, SIGUSR2) != 0) {
+        fprintf(stderr, "vmfc: ripresa non disponibile per questo backend\n");
+        return 1;
     }
     printf("VM \"%s\" ripresa.\n", name);
     return 0;
@@ -986,11 +949,9 @@ static int cmd_reboot(const char *root, const char *name)
         fprintf(stderr, "vmfc: la VM \"%s\" e' spenta\n", name);
         return 1;
     }
-    if (qemu_request_reset(&cfg) != 0) {
-        if (vm_guest_is_windows(&cfg) || kill(pid, SIGHUP) != 0) {
-            fprintf(stderr, "vmfc: reboot non disponibile per questo backend\n");
-            return 1;
-        }
+    if (vm_guest_is_windows(&cfg) || kill(pid, SIGHUP) != 0) {
+        fprintf(stderr, "vmfc: reboot non disponibile per questo backend\n");
+        return 1;
     }
     printf("Riavvio richiesto a \"%s\" (pid %ld).\n", name, (long)pid);
     return 0;
@@ -1007,14 +968,12 @@ static int cmd_status(const char *root, const char *name)
         return 0;
     }
     char state[64] = "";
-    if (qemu_query_status(&cfg, state, sizeof(state)) != 0) {
-        char path[PATH_MAX];
-        snprintf(path, sizeof(path), "%s/vmfc.state", cfg.bundle);
-        char *text = read_text_file(path);
-        if (text) {
-            snprintf(state, sizeof(state), "%s", str_trim(text));
-            free(text);
-        }
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/vmfc.state", cfg.bundle);
+    char *text = read_text_file(path);
+    if (text) {
+        snprintf(state, sizeof(state), "%s", str_trim(text));
+        free(text);
     }
     if (state[0])
         printf("La VM \"%s\" e' in esecuzione (pid %ld, stato %s).\n", name, (long)pid, state);

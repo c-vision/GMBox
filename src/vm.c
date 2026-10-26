@@ -514,45 +514,37 @@ void vm_print_info(const vm_config *cfg)
 {
     char mem[64];
     char vars[PATH_MAX];
-    int qemu = vm_guest_is_windows(cfg);
-    int qemu_iso = getenv("VMFC_QEMU_ISO") && *getenv("VMFC_QEMU_ISO");
-    int qemu_net = getenv("VMFC_QEMU_NET") && *getenv("VMFC_QEMU_NET");
+    int windows = vm_guest_is_windows(cfg);
     format_gib(cfg->memory_mib, mem, sizeof(mem));
     snprintf(vars, sizeof(vars), "%s/vars.fd", cfg->bundle);
     printf("Nome:        %s\n", cfg->name);
     printf("Bundle:      %s\n", cfg->bundle);
     printf("Guest OS:    %s\n", cfg->guest_os);
-    printf("Motore:      %s\n", qemu
-           ? "QEMU/HVF (Windows)" : "VZ/Virtualization.framework (Linux)");
-    printf("Firmware:    %s\n", qemu ? "EFI (EDK2)" : "EFI (VZ)");
+    printf("Motore:      %s\n", windows
+           ? "HVF nativo (build/hvf_win)" : "VZ/Virtualization.framework (Linux)");
+    printf("Firmware:    EFI\n");
     printf("CPU:         %u\n", cfg->cpus);
     printf("Memoria:     %s\n", mem);
     printf("Disco:       %llu MiB (%s)\n", (unsigned long long)cfg->disk_mib, cfg->disk);
     if (cfg->tags[0])
         printf("Tag:         %s\n", cfg->tags);
-    printf("NVRAM:       %s\n", qemu ? vars : cfg->nvram);
+    printf("NVRAM:       %s\n", windows ? vars : cfg->nvram);
     if (cfg->iso[0])
-        printf("ISO:         %s%s\n", cfg->iso,
-               qemu && !qemu_iso ? " (non collegata: VMFC_QEMU_ISO=1)" : "");
+        printf("ISO:         %s\n", cfg->iso);
     else
         printf("ISO:         (nessuna)\n");
     if (cfg->drivers[0])
-        printf("Driver ISO:  %s%s\n", cfg->drivers,
-               qemu && !qemu_iso ? " (non collegata: VMFC_QEMU_ISO=1)" : "");
+        printf("Driver ISO:  %s\n", cfg->drivers);
     if (cfg->shared_dir[0]) {
-        if (qemu)
-            printf("Cartella:    %s (non supportata dal backend QEMU)\n", cfg->shared_dir);
+        if (windows)
+            printf("Cartella:    %s (non supportata dal VMM nativo)\n", cfg->shared_dir);
         else
             printf("Cartella:    %s%s\n", cfg->shared_dir, cfg->shared_readonly ? " (sola lettura)" : "");
     }
-    if (qemu) {
-        if (qemu_net)
-            printf("Rete:        NAT QEMU (virtio-net-pci), MAC %s\n", cfg->mac);
-        else
-            printf("Rete:        disattivata (QEMU default; VMFC_QEMU_NET=1 per NAT)\n");
-    } else {
+    if (windows)
+        printf("Rete:        non disponibile nel VMM nativo, MAC %s\n", cfg->mac);
+    else
         printf("Rete:        NAT, MAC %s\n", cfg->mac);
-    }
     printf("UUID:        %s\n", cfg->uuid);
     pid_t pid;
     if (vm_running(cfg, &pid))
