@@ -15,7 +15,7 @@ fails=0
 for i in $(seq 1 "$N"); do
   rm -f "$fifo" "$W/screen.bmp"; mkfifo "$fifo"
   t0=$(now)
-  ( exec 3<>"$fifo"; cd "$ROOT"; GMBOX_INPUT="$fifo" GMBOX_AUTOENTER=1 GMBOX_FB_DUMP="$W/screen.bmp" GMBOX_FB_INTERVAL=1 \
+  ( exec 3<>"$fifo"; cd "$ROOT"; GMBOX_INPUT="$fifo" GMBOX_AUTOENTER=1 GMBOX_FB_DUMP="$W/screen.bmp" GMBOX_FB_INTERVAL=2 \
     GMBOX_DISK="$DISK" GMBOX_VARS="$VARS" GMBOX_WATCHDOG_SEC=900 build/hvf_win > "$W/vm$i.log" 2>&1 < /dev/null ) &
   pid=$!
   tl=""; td=""; res=ok
