@@ -65,7 +65,8 @@ current Aqua session; `--dry-run` prints the plist without changing the system.
 
 The VM library scans subfolders, shows status, disk/RAM, last start and tags. Tags are stored in
 `config.vmx` (`vmfc.tags`). Pause, resume, status and reboot use QEMU QMP when available; VZ guests
-accept pause/resume through `SIGUSR1`/`SIGUSR2`.
+accept pause/resume through `SIGUSR1`/`SIGUSR2` and reboot through a graceful stop/start. VZ status is
+also recorded in `vmfc.state`.
 
 ## Current limitations
 

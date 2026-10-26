@@ -980,8 +980,10 @@ static int cmd_reboot(const char *root, const char *name)
         return 1;
     }
     if (qemu_request_reset(&cfg) != 0) {
-        fprintf(stderr, "vmfc: reboot non disponibile per questo backend (QMP assente)\n");
-        return 1;
+        if (vm_guest_is_windows(&cfg) || kill(pid, SIGHUP) != 0) {
+            fprintf(stderr, "vmfc: reboot non disponibile per questo backend\n");
+            return 1;
+        }
     }
     printf("Riavvio richiesto a \"%s\" (pid %ld).\n", name, (long)pid);
     return 0;
@@ -997,8 +999,17 @@ static int cmd_status(const char *root, const char *name)
         printf("La VM \"%s\" e' spenta.\n", name);
         return 0;
     }
-    char state[64];
-    if (qemu_query_status(&cfg, state, sizeof(state)) == 0)
+    char state[64] = "";
+    if (qemu_query_status(&cfg, state, sizeof(state)) != 0) {
+        char path[PATH_MAX];
+        snprintf(path, sizeof(path), "%s/vmfc.state", cfg.bundle);
+        char *text = read_text_file(path);
+        if (text) {
+            snprintf(state, sizeof(state), "%s", str_trim(text));
+            free(text);
+        }
+    }
+    if (state[0])
         printf("La VM \"%s\" e' in esecuzione (pid %ld, stato %s).\n", name, (long)pid, state);
     else
         printf("La VM \"%s\" e' in esecuzione (pid %ld, stato non disponibile).\n", name, (long)pid);

@@ -22,7 +22,17 @@ static int g_headless;
 static int g_running;
 static int g_terminating;
 static int g_terminate_replied;
+static int g_reboot_requested;
 static int g_sigpipe[2] = {-1, -1};
+
+static void set_state(const char *state)
+{
+    if (!g_cfg)
+        return;
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/vmfc.state", g_cfg->bundle);
+    write_text_file(path, state);
+}
 
 static void show_alert(const char *title, const char *info)
 {
@@ -58,12 +68,21 @@ static void print_error(const char *what, id err)
     }
 }
 
+static void act_start(id self, SEL _cmd, id sender);
+
 static void stop_completed(id error)
 {
     (void)error;
     g_running = 0;
-    if (g_terminating)
+    set_state("stopped");
+    if (g_terminating) {
         reply_terminate_yes();
+        return;
+    }
+    if (g_reboot_requested) {
+        g_reboot_requested = 0;
+        act_start(NULL, NULL, NULL);
+    }
 }
 
 static void force_stop(void)
@@ -83,10 +102,16 @@ static void guest_did_stop(id self, SEL _cmd, id vm)
     (void)_cmd;
     (void)vm;
     g_running = 0;
+    set_state("stopped");
     printf("vmfc: la VM si e' arrestata.\n");
     fflush(stdout);
     if (g_terminating) {
         reply_terminate_yes();
+        return;
+    }
+    if (g_reboot_requested) {
+        g_reboot_requested = 0;
+        act_start(NULL, NULL, NULL);
         return;
     }
     if (g_headless) {
@@ -108,6 +133,7 @@ static void did_stop_with_error(id self, SEL _cmd, id vm, id error)
     (void)_cmd;
     (void)vm;
     g_running = 0;
+    set_state("error");
     print_error("arresto anomalo della VM", error);
     if (g_terminating) {
         reply_terminate_yes();
@@ -117,6 +143,24 @@ static void did_stop_with_error(id self, SEL _cmd, id vm, id error)
                o_cstr(o_msg0(error, "localizedDescription")));
     if (g_headless)
         o_vmsg1(g_app, "terminate:", NULL);
+}
+
+static void request_shutdown(void);
+
+static void reboot_vm(void)
+{
+    if (!g_vm)
+        return;
+    if (!g_running) {
+        act_start(NULL, NULL, NULL);
+        return;
+    }
+    if (g_reboot_requested)
+        return;
+    g_reboot_requested = 1;
+    printf("vmfc: riavvio della VM...\n");
+    fflush(stdout);
+    request_shutdown();
 }
 
 static void request_shutdown(void)
@@ -152,6 +196,7 @@ static void act_start(id self, SEL _cmd, id sender)
           o_vmsg1(g_app, "terminate:", NULL);
       } else {
           g_running = 1;
+          set_state("running");
           printf("vmfc: VM avviata.\n");
           fflush(stdout);
       }
@@ -186,8 +231,10 @@ static void act_pause(id self, SEL _cmd, id sender)
     void (^done)(id) = ^(id error) {
       if (error)
           print_error("pausa non riuscita", error);
-      else
+      else {
+          set_state("paused");
           printf("vmfc: VM in pausa.\n");
+      }
     };
     void *blk = Block_copy(done);
     ((void(*)(id, SEL, void *))objc_msgSend)(g_vm, o_sel("pauseWithCompletionHandler:"), blk);
@@ -203,8 +250,10 @@ static void act_resume(id self, SEL _cmd, id sender)
     void (^done)(id) = ^(id error) {
       if (error)
           print_error("ripresa non riuscita", error);
-      else
+      else {
+          set_state("running");
           printf("vmfc: VM ripresa.\n");
+      }
     };
     void *blk = Block_copy(done);
     ((void(*)(id, SEL, void *))objc_msgSend)(g_vm, o_sel("resumeWithCompletionHandler:"), blk);
@@ -655,11 +704,12 @@ static void install_signal_handlers(void)
     signal(SIGINT, signal_trampoline);
     signal(SIGUSR1, signal_trampoline);
     signal(SIGUSR2, signal_trampoline);
+    signal(SIGHUP, signal_trampoline);
     dispatch_source_t src = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, (uintptr_t)g_sigpipe[0], 0,
                                                    dispatch_get_main_queue());
     dispatch_source_set_event_handler(src, ^{
       char buf[32];
-      int terminate = 0, pause = 0, resume = 0;
+      int terminate = 0, pause = 0, resume = 0, reboot = 0;
       ssize_t n;
       while ((n = read(g_sigpipe[0], buf, sizeof(buf))) > 0) {
           for (ssize_t i = 0; i < n; i++) {
@@ -667,6 +717,8 @@ static void install_signal_handlers(void)
                   pause = 1;
               else if (buf[i] == SIGUSR2)
                   resume = 1;
+              else if (buf[i] == SIGHUP)
+                  reboot = 1;
               else
                   terminate = 1;
           }
@@ -675,6 +727,8 @@ static void install_signal_handlers(void)
           act_pause(NULL, NULL, NULL);
       if (resume)
           act_resume(NULL, NULL, NULL);
+      if (reboot)
+          reboot_vm();
       if (!terminate || g_terminating)
           return;
       g_terminating = 1;
@@ -695,6 +749,7 @@ int vz_run(vm_config *cfg, int headless, int seconds)
     g_running = 0;
     g_terminating = 0;
     g_terminate_replied = 0;
+    g_reboot_requested = 0;
 
     void *pool = objc_autoreleasePoolPush();
     g_app = o_msg0(o_cls("NSApplication"), "sharedApplication");
@@ -771,6 +826,7 @@ int vz_run(vm_config *cfg, int headless, int seconds)
 
     o_vmsg0(g_app, "run");
 
+    set_state("stopped");
     vm_pid_remove(cfg);
     g_vm = NULL;
     g_window = NULL;
