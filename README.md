@@ -63,3 +63,8 @@ Useful variables: `GMBOX_FW`, `GMBOX_VARS`, `GMBOX_DISK`, `GMBOX_NVME_LOG`, `GMB
 - `tools/firmware/` — EDK2 firmware (build recipe in `tools/firmware/README.md`).
 
 Project rule: C99 / shell only, no Python.
+
+## License
+
+Apache-2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE). The EDK2 firmware images in
+`tools/firmware/` are built from TianoCore EDK2 and keep their own (BSD-2-Clause-Patent) licence.
