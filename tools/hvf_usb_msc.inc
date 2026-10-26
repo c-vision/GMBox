@@ -21,6 +21,7 @@ struct msc_state {
     uint8_t inq[36];
 };
 static struct msc_state msc_dev[USB_NPORTS];
+static int msc_port = 2;
 
 static int msc_setup(struct usb_dev *d, const uint8_t *s);
 static int msc_bulk(struct usb_dev *d, uint32_t ep, uint32_t pid,
@@ -263,7 +264,7 @@ static int msc_attach(const char *path)
     if (getenv("GMBOX_USB_RO")) ro = 1;
     struct stat st;
     if (fstat(fd, &st) < 0 || st.st_size < MSC_BLOCK) { close(fd); return -1; }
-    struct msc_state *m = &msc_dev[2];
+    struct msc_state *m = &msc_dev[msc_port];
     if (m->fd >= 0) close(m->fd);
     m->fd = fd; m->ro = ro; m->blocks = (uint64_t)st.st_size / MSC_BLOCK;
     memset(m->inq, 0, sizeof m->inq);
@@ -271,23 +272,23 @@ static int msc_attach(const char *path)
     memcpy(m->inq + 8, "GMBox   ", 8);
     memcpy(m->inq + 16, "USB Storage     ", 16);
     memcpy(m->inq + 32, "0001", 4);
-    msc_reset(2);
-    usb_devs[2].is_msc = 1;
-    usb_portsc[2] |= 1 | 0x1000;
+    msc_reset(msc_port);
+    usb_devs[msc_port].is_msc = 1;
+    usb_portsc[msc_port] |= 1 | 0x1000;
     usb_sts |= 4;
     usb_irq_update();
-    fprintf(stderr, "usb: storage attached %s (%llu blocks%s) port2=0x%x ports=%d\n", path,
-            (unsigned long long)m->blocks, ro ? ", read-only" : "", usb_portsc[2], USB_NPORTS);
+    fprintf(stderr, "usb: storage attached %s (%llu blocks%s) port%d=0x%x ports=%d\n", path,
+            (unsigned long long)m->blocks, ro ? ", read-only" : "", msc_port, usb_portsc[msc_port], USB_NPORTS);
     return 0;
 }
 
 static void msc_detach(void)
 {
-    struct msc_state *m = &msc_dev[2];
+    struct msc_state *m = &msc_dev[msc_port];
     if (m->fd >= 0) close(m->fd);
     m->fd = -1; m->blocks = 0;
-    usb_devs[2].is_msc = 0;
-    usb_portsc[2] &= ~1u;
+    usb_devs[msc_port].is_msc = 0;
+    usb_portsc[msc_port] &= ~1u;
     usb_sts |= 4;
     usb_irq_update();
     fprintf(stderr, "usb: storage detached\n");
@@ -300,7 +301,12 @@ static void msc_init(void)
         msc_dev[i].blocks = 0;
         msc_dev[i].ro = 0;
     }
-    usb_portsc[2] = 0x1000 | 0x2;
+    const char *mp = getenv("GMBOX_USB_PORT");
+    msc_port = mp ? atoi(mp) : 1;
+    if (msc_port < 0 || msc_port >= USB_NPORTS) msc_port = 1;
+    usb_portsc[msc_port] = 0x1000 | 0x2;
+    for (int i = 0; i < USB_NPORTS; i++)
+        if (i != 0 && i != msc_port) usb_portsc[i] = 0x1000 | 0x2;
     const char *path = getenv("GMBOX_USB_DISK");
     if (path && *path) msc_attach(path);
 }

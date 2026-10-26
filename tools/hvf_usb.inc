@@ -20,7 +20,7 @@
 
 #define USB_IPA        0x20004000UL     /* default BAR0, reassigned by the OS */
 #define USB_INTID      37u              /* SPI 5: slot 2 INTA in the DTB / _PRT */
-#define USB_NPORTS     3
+#define USB_NPORTS     2
 
 static int usb_irq_level;
 static uint32_t usb_cmd, usb_sts, usb_intr, usb_frindex_base, usb_ctrlds, usb_perbase,
@@ -51,6 +51,7 @@ static const uint8_t mouse_report_desc[] = {
 
 struct usb_dev {
     int is_kbd;
+    int is_composite;
     int is_msc;
     uint8_t addr, pending_addr;
     int has_pending_addr;
@@ -62,6 +63,8 @@ struct usb_dev {
     /* interrupt IN queue (8-byte reports; mouse uses 4) */
     uint8_t q[256][8];
     int qh, qt;
+    uint8_t mq[256][8];
+    int mqh, mqt;
 };
 static struct usb_dev usb_devs[USB_NPORTS];
 
@@ -80,6 +83,15 @@ static void q_push(struct usb_dev *d, const uint8_t *r)
         return;
     memcpy(d->q[d->qt], r, 8);
     d->qt = n;
+}
+
+static void mq_push(struct usb_dev *d, const uint8_t *r)
+{
+    int n = (d->mqt + 1) & 255;
+    if (n == d->mqh)
+        return;
+    memcpy(d->mq[d->mqt], r, 8);
+    d->mqt = n;
 }
 
 static int usb_str_desc(struct usb_dev *d, int idx, uint8_t *out)
@@ -102,6 +114,19 @@ static int usb_config_desc(struct usb_dev *d, uint8_t *o)
 {
     if (d->is_msc)
         return msc_config_desc(d, o);
+    if (d->is_composite) {
+        static const uint8_t c[] = {
+            9, 2, 59, 0, 1, 1, 0, 0x80, 50,
+            9, 4, 0, 0, 1, 3, 1, 1, 0,
+            9, 0x21, 0x11, 0x01, 0, 1, 0x22, 0x3f, 0,
+            7, 5, 0x81, 3, 8, 0, 8,
+            9, 4, 1, 0, 1, 3, 1, 2, 0,
+            9, 0x21, 0x11, 0x01, 0, 1, 0x22, 0x32, 0,
+            7, 5, 0x82, 3, 4, 0, 0x0a
+        };
+        memcpy(o, c, sizeof c);
+        return (int)sizeof c;
+    }
     int rdl = d->is_kbd ? (int)sizeof kbd_report_desc : (int)sizeof mouse_report_desc;
     int mp = d->is_kbd ? 8 : 4;
     uint8_t c[] = {
@@ -144,10 +169,16 @@ static int usb_setup(struct usb_dev *d, const uint8_t *s)
             } else if (t == 6) { /* device qualifier: not supported by a HS-only model */
                 return -1;
             } else if (bm == 0x81 && t == 0x22) {
-                if (d->is_kbd) { memcpy(d->ctl_buf, kbd_report_desc, sizeof kbd_report_desc); d->ctl_len = sizeof kbd_report_desc; }
+                uint16_t wi = (uint16_t)(s[4] | (s[5] << 8));
+                if (d->is_composite && wi == 1) { memcpy(d->ctl_buf, mouse_report_desc, sizeof mouse_report_desc); d->ctl_len = sizeof mouse_report_desc; }
+                else if (d->is_composite) { memcpy(d->ctl_buf, kbd_report_desc, sizeof kbd_report_desc); d->ctl_len = sizeof kbd_report_desc; }
+                else if (d->is_kbd) { memcpy(d->ctl_buf, kbd_report_desc, sizeof kbd_report_desc); d->ctl_len = sizeof kbd_report_desc; }
                 else { memcpy(d->ctl_buf, mouse_report_desc, sizeof mouse_report_desc); d->ctl_len = sizeof mouse_report_desc; }
             } else if (bm == 0x81 && t == 0x21) {
-                uint8_t c[34]; usb_config_desc(d, c); memcpy(d->ctl_buf, c + 18, 9); d->ctl_len = 9;
+                uint16_t wi = (uint16_t)(s[4] | (s[5] << 8));
+                uint8_t c[64]; usb_config_desc(d, c);
+                int off = (d->is_composite && wi == 1) ? 43 : 18;
+                memcpy(d->ctl_buf, c + off, 9); d->ctl_len = 9;
             } else
                 return -1;
             break;
@@ -164,7 +195,7 @@ static int usb_setup(struct usb_dev *d, const uint8_t *s)
         switch (br) {
         case 0x0a: case 0x0b: break;                  /* SET_IDLE, SET_PROTOCOL */
         case 0x09: break;                             /* SET_REPORT: data stage ignored */
-        case 0x01: memset(d->ctl_buf, 0, 8); d->ctl_len = d->is_kbd ? 8 : 4; break;
+        case 0x01: { uint16_t wi = (uint16_t)(s[4] | (s[5] << 8)); memset(d->ctl_buf, 0, 8); d->ctl_len = (d->is_composite && wi == 1) ? 4 : (d->is_kbd ? 8 : 4); break; }
         case 0x03: d->ctl_buf[0] = 1; d->ctl_len = 1; break;
         case 0x02: d->ctl_buf[0] = 0; d->ctl_len = 1; break;
         default: return -1;
@@ -261,17 +292,17 @@ static void usb_cmd_line(char *l)
         while (dx || dy) {
             int sx = dx > 127 ? 127 : dx < -127 ? -127 : dx, sy = dy > 127 ? 127 : dy < -127 ? -127 : dy;
             uint8_t r[8] = { mouse_btn, (uint8_t)(int8_t)sx, (uint8_t)(int8_t)sy, 0 };
-            q_push(&usb_devs[1], r);
+            mq_push(&usb_devs[0], r);
             dx -= sx; dy -= sy;
         }
     } else if (!strcmp(l, "wheel") && arg) {
         uint8_t r[8] = { mouse_btn, 0, 0, (uint8_t)(int8_t)atoi(arg) };
-        q_push(&usb_devs[1], r);
+        mq_push(&usb_devs[0], r);
     } else if ((!strcmp(l, "click") || !strcmp(l, "down") || !strcmp(l, "up")) && arg) {
         uint8_t b = arg[0] == 'r' ? 2 : arg[0] == 'm' ? 4 : 1;
         uint8_t r[8] = { 0 };
-        if (l[0] != 'u') { mouse_btn |= b; r[0] = mouse_btn; q_push(&usb_devs[1], r); }
-        if (l[0] != 'd') { mouse_btn &= (uint8_t)~b; r[0] = mouse_btn; q_push(&usb_devs[1], r); }
+        if (l[0] != 'u') { mouse_btn |= b; r[0] = mouse_btn; mq_push(&usb_devs[0], r); }
+        if (l[0] != 'd') { mouse_btn &= (uint8_t)~b; r[0] = mouse_btn; mq_push(&usb_devs[0], r); }
     }
 }
 
@@ -319,13 +350,17 @@ static void usb_reset_regs(void)
     usb_perbase = usb_asyncaddr = usb_ctrlds = 0;
     usb_cfgflag = 0;
     for (int i = 0; i < USB_NPORTS; i++) {
-        usb_portsc[i] = 0x1000 | 0x3;        /* PP, CCS, CSC */
+        usb_portsc[i] = 0x1000 | 0x2;        /* PP, CSC only by default */
         usb_port_reset[i] = 0;
         usb_devs[i].addr = 0;
         usb_devs[i].has_pending_addr = 0;
         usb_devs[i].config = 0;
         usb_devs[i].ctl_stage = 0;
+        usb_devs[i].qh = usb_devs[i].qt = 0;
+        usb_devs[i].mqh = usb_devs[i].mqt = 0;
     }
+    usb_portsc[0] = 0x1000 | 0x3;             /* composite HID keyboard+mouse */
+    usb_portsc[1] = 0x1000 | 0x3;             /* storage or placeholder */
 }
 
 static uint32_t usb_frindex(void)
@@ -337,6 +372,10 @@ static uint32_t usb_frindex(void)
 
 static uint32_t usb_reg32(uint64_t off)
 {
+    if (getenv("GMBOX_USBLOG") && (off == 0x04 || off == 0x08 || off >= 0x64)) {
+        static unsigned reglog;
+        if (reglog++ < 80) fprintf(stderr, "USB reg read off=0x%llx\n", (unsigned long long)off);
+    }
     switch (off) {
     case 0x00: return 0x01000020;                 /* HCIVERSION 1.00 | CAPLENGTH 0x20 */
     case 0x04: return USB_NPORTS;                 /* HCSPARAMS */
@@ -364,7 +403,12 @@ static uint32_t usb_reg32(uint64_t off)
 
 static uint64_t usb_read(uint64_t off, int size)
 {
-    uint32_t v = usb_reg32(off & ~3ULL) >> ((off & 3) * 8);
+    uint32_t rv = usb_reg32(off & ~3ULL);
+    uint32_t v = rv >> ((off & 3) * 8);
+    if (getenv("GMBOX_USBLOG") && (off == 0x04 || off == 0x6c)) {
+        static unsigned vlog;
+        if (vlog++ < 30) fprintf(stderr, "USB reg value off=0x%llx v=0x%x\n", (unsigned long long)off, rv);
+    }
     if (size == 1) v &= 0xff; else if (size == 2) v &= 0xffff;
     return v;
 }
@@ -509,14 +553,23 @@ static void usb_qh(uint32_t qha, int periodic)
             } else {
                 n = mr;
             }
-        } else if (ep == 1 && pid == 1) {                /* interrupt IN */
+        } else if (ep == 1 && pid == 1) {                /* keyboard interrupt IN */
             if (d->qh == d->qt) {
                 res = 1;
             } else {
-                int len = d->is_kbd ? 8 : 4;
+                int len = 8;
                 n = (int)total < len ? (int)total : len;
                 usb_buf_copy(&qh[7], offset, d->q[d->qh], (uint32_t)n, 1);
                 d->qh = (d->qh + 1) & 255;
+            }
+        } else if (d->is_composite && ep == 2 && pid == 1) {  /* mouse interrupt IN */
+            if (d->mqh == d->mqt) {
+                res = 1;
+            } else {
+                int len = 4;
+                n = (int)total < len ? (int)total : len;
+                usb_buf_copy(&qh[7], offset, d->mq[d->mqh], (uint32_t)n, 1);
+                d->mqh = (d->mqh + 1) & 255;
             }
         } else {
             res = 2;
@@ -612,6 +665,7 @@ static void usb_init(void)
         return;
     }
     usb_devs[0].is_kbd = 1;
+    usb_devs[0].is_composite = 1;
     usb_devs[1].is_kbd = 0;
     usb_reset_regs();
     msc_init();
