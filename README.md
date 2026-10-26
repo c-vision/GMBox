@@ -47,7 +47,7 @@ Useful variables: `GMBOX_FW`, `GMBOX_VARS`, `GMBOX_DISK`, `GMBOX_NVME_LOG`, `GMB
 ## Current limitations
 
 - The native VMM is a **prototype**: firmware, VARS and disk paths are still partly hard-coded.
-- Slow boot (about 3 minutes to the sign-in screen) and **a single vCPU**.
+- **A single vCPU** only (boot measured on the dev Mac: ~15 s to the lock screen, ~31 s to the desktop; one run, warm APFS clone, not yet a cold-boot benchmark).
 - Display is `ramfb` 800x600 only: no 3D acceleration, no audio, no clipboard or shared folders.
 - No networking in the native VMM; no vTPM, Secure Boot or USB passthrough.
 - No snapshots and no VM encryption.
