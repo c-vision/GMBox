@@ -41,6 +41,7 @@ static void usage(FILE *out)
             "  vmfc status NOME [--dir CARTELLA]\n"
             "  vmfc info   NOME [--dir CARTELLA]\n"
             "  vmfc check  NOME [--fix] [--dir CARTELLA]\n"
+            "  vmfc port   NOME [--add tcp:2222:22] [--remove ...] [--clear] [--dir CARTELLA]\n"
             "  vmfc iso    NOME [FILE|--none] [--dir CARTELLA]\n"
             "  vmfc tag    NOME [TAG...] [--dir CARTELLA]\n"
             "  vmfc disk    NOME [--dir CARTELLA]\n"
@@ -1322,6 +1323,110 @@ static int cmd_compact(const char *root, const char *name)
     return failed ? 1 : 0;
 }
 
+static int normalize_port_rule(const char *in, char *out, size_t n)
+{
+    char proto[8];
+    unsigned host = 0, guest = 0;
+    if (!in || sscanf(in, "%7[^:]:%u:%u", proto, &host, &guest) != 3)
+        return -1;
+    if (host == 0 || host > 65535 || guest == 0 || guest > 65535)
+        return -1;
+    if (str_ieq(proto, "tcp"))
+        snprintf(out, n, "tcp:%u:%u", host, guest);
+    else if (str_ieq(proto, "udp"))
+        snprintf(out, n, "udp:%u:%u", host, guest);
+    else
+        return -1;
+    return 0;
+}
+
+static int port_rule_present(const char *rules, const char *rule)
+{
+    const char *p = rules;
+    while (p && *p) {
+        while (*p == ',' || *p == ' ') p++;
+        const char *e = p;
+        while (*e && *e != ',') e++;
+        size_t n = (size_t)(e - p);
+        if (n == strlen(rule) && !strncasecmp(p, rule, n))
+            return 1;
+        p = *e ? e + 1 : e;
+    }
+    return 0;
+}
+
+static int add_port_rule(char *rules, size_t n, const char *rule)
+{
+    if (port_rule_present(rules, rule))
+        return 0;
+    if (rules[0])
+        strncat(rules, ",", n - strlen(rules) - 1);
+    strncat(rules, rule, n - strlen(rules) - 1);
+    return 0;
+}
+
+static int remove_port_rule(char *rules, size_t n, const char *rule)
+{
+    char tmp[512] = "";
+    const char *p = rules;
+    while (p && *p) {
+        while (*p == ',' || *p == ' ') p++;
+        const char *e = p;
+        while (*e && *e != ',') e++;
+        size_t len = (size_t)(e - p);
+        if (!(len == strlen(rule) && !strncasecmp(p, rule, len))) {
+            if (tmp[0])
+                strncat(tmp, ",", sizeof(tmp) - strlen(tmp) - 1);
+            strncat(tmp, p, len);
+        }
+        p = *e ? e + 1 : e;
+    }
+    snprintf(rules, n, "%s", tmp);
+    return 0;
+}
+
+static int cmd_port(const char *root, const char *name, char **adds, int nadds,
+                    char **removes, int nremoves, int clear)
+{
+    vm_config cfg;
+    if (load_vm(root, name, &cfg) != 0)
+        return 1;
+    pid_t pid;
+    if (vm_running(&cfg, &pid)) {
+        fprintf(stderr, "vmfc: la VM e' in esecuzione (pid %ld); arrestala prima\n", (long)pid);
+        return 1;
+    }
+    if (clear)
+        cfg.port_forward[0] = 0;
+    for (int i = 0; i < nadds; i++) {
+        char rule[64];
+        if (normalize_port_rule(adds[i], rule, sizeof(rule)) != 0) {
+            fprintf(stderr, "vmfc: regola non valida: %s (usa tcp:2222:22)\n", adds[i]);
+            return 2;
+        }
+        add_port_rule(cfg.port_forward, sizeof(cfg.port_forward), rule);
+    }
+    for (int i = 0; i < nremoves; i++) {
+        char rule[64];
+        if (normalize_port_rule(removes[i], rule, sizeof(rule)) != 0) {
+            fprintf(stderr, "vmfc: regola non valida: %s\n", removes[i]);
+            return 2;
+        }
+        remove_port_rule(cfg.port_forward, sizeof(cfg.port_forward), rule);
+    }
+    if (clear || nadds || nremoves) {
+        if (vm_save(&cfg) != 0) {
+            fprintf(stderr, "vmfc: salvataggio configurazione fallito\n");
+            return 1;
+        }
+    }
+    printf("Port forwarding di \"%s\": %s\n", cfg.name,
+           cfg.port_forward[0] ? cfg.port_forward : "(nessuno)");
+    if (cfg.port_forward[0] && !vm_guest_is_windows(&cfg))
+        printf("Nota: il backend VZ non applica il port forwarding; usa QEMU/HVF.\n");
+    return 0;
+}
+
 static int cmd_check(const char *root, const char *name, int fix)
 {
     vm_config cfg;
@@ -1579,6 +1684,29 @@ int main(int argc, char **argv)
             return 2;
         }
         return cmd_clone(root, src_name, dst_name);
+    }
+    if (!strcmp(cmd, "port")) {
+        const char *name = NULL;
+        char *adds[16], *removes[16];
+        int nadds = 0, nremoves = 0, clear = 0;
+        for (int i = 0; i < rest_argc && nadds < 16 && nremoves < 16; i++) {
+            if (!strcmp(rest[i], "--dir")) { i++; continue; }
+            if (!strcmp(rest[i], "--add")) {
+                if (i + 1 < rest_argc) adds[nadds++] = rest[++i];
+                continue;
+            }
+            if (!strcmp(rest[i], "--remove")) {
+                if (i + 1 < rest_argc) removes[nremoves++] = rest[++i];
+                continue;
+            }
+            if (!strcmp(rest[i], "--clear")) { clear = 1; continue; }
+            if (rest[i][0] != '-' && !name) name = rest[i];
+        }
+        if (!name) {
+            fprintf(stderr, "vmfc: specifica il nome della VM\n");
+            return 2;
+        }
+        return cmd_port(root, name, adds, nadds, removes, nremoves, clear);
     }
     if (!strcmp(cmd, "check")) {
         const char *name = NULL;

@@ -254,6 +254,11 @@ int vm_load(const char *bundle, vm_config *cfg)
         snprintf(cfg->tags, sizeof(cfg->tags), "%s", v);
         free(v);
     }
+    v = vmx_lookup(text, "vmfc.portForward");
+    if (v) {
+        snprintf(cfg->port_forward, sizeof(cfg->port_forward), "%s", v);
+        free(v);
+    }
     free(text);
     return 0;
 }
@@ -292,12 +297,13 @@ char *vmx_find_disk(const char *vmx_path)
 
 int vm_save(const vm_config *cfg)
 {
-    char esc_name[512], esc_iso[PATH_MAX * 2], esc_drivers[PATH_MAX * 2], esc_share[PATH_MAX * 2], esc_tags[1024];
+    char esc_name[512], esc_iso[PATH_MAX * 2], esc_drivers[PATH_MAX * 2], esc_share[PATH_MAX * 2], esc_tags[1024], esc_ports[2048];
     vmx_escape(cfg->name, esc_name, sizeof(esc_name));
     vmx_escape(cfg->iso, esc_iso, sizeof(esc_iso));
     vmx_escape(cfg->drivers, esc_drivers, sizeof(esc_drivers));
     vmx_escape(cfg->shared_dir, esc_share, sizeof(esc_share));
     vmx_escape(cfg->tags, esc_tags, sizeof(esc_tags));
+    vmx_escape(cfg->port_forward, esc_ports, sizeof(esc_ports));
 
     FILE *f = fopen(cfg->vmx, "wb");
     if (!f)
@@ -338,6 +344,7 @@ int vm_save(const vm_config *cfg)
     fprintf(f, "vmfc.sharedFolder = \"%s\"\n", esc_share);
     fprintf(f, "vmfc.sharedReadOnly = \"%s\"\n", cfg->shared_readonly ? "TRUE" : "FALSE");
     fprintf(f, "vmfc.tags = \"%s\"\n", esc_tags);
+    fprintf(f, "vmfc.portForward = \"%s\"\n", esc_ports);
     fprintf(f, "%s\n", "vmfc.graphics = \"virtio-gpu 1920x1200\"");
     int rc = fclose(f);
     return rc == 0 ? 0 : -1;
@@ -530,6 +537,8 @@ void vm_print_info(const vm_config *cfg)
     printf("Disco:       %llu MiB (%s)\n", (unsigned long long)cfg->disk_mib, cfg->disk);
     if (cfg->tags[0])
         printf("Tag:         %s\n", cfg->tags);
+    if (cfg->port_forward[0])
+        printf("Porte:       %s\n", cfg->port_forward);
     printf("NVRAM:       %s\n", qemu ? vars : cfg->nvram);
     if (cfg->iso[0])
         printf("ISO:         %s%s\n", cfg->iso,

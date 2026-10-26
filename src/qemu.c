@@ -222,6 +222,31 @@ int qemu_query_status(const vm_config *cfg, char *status, size_t n)
     return 0;
 }
 
+static void qemu_netdev(const vm_config *cfg, char *out, size_t n)
+{
+    snprintf(out, n, "user,id=net0");
+    const char *p = cfg->port_forward;
+    while (p && *p) {
+        while (*p == ',' || *p == ' ') p++;
+        const char *e = p;
+        while (*e && *e != ',') e++;
+        char rule[128];
+        size_t len = (size_t)(e - p);
+        if (len >= sizeof(rule))
+            len = sizeof(rule) - 1;
+        memcpy(rule, p, len);
+        rule[len] = 0;
+        char proto[8];
+        unsigned host = 0, guest = 0;
+        if (sscanf(rule, "%7[^:]:%u:%u", proto, &host, &guest) == 3 &&
+            host > 0 && host <= 65535 && guest > 0 && guest <= 65535) {
+            size_t used = strlen(out);
+            snprintf(out + used, n - used, ",hostfwd=%s::%u-:%u", proto, host, guest);
+        }
+        p = *e ? e + 1 : e;
+    }
+}
+
 int qemu_run(vm_config *cfg, int headless, int seconds)
 {
     static const char *const qemu_candidates[] = {
@@ -327,9 +352,11 @@ int qemu_run(vm_config *cfg, int headless, int seconds)
     add_arg(argv, &argc, "-pidfile");
     add_arg(argv, &argc, "%s", cfg->pidfile);
 
-    if (getenv("VMFC_QEMU_NET") && *getenv("VMFC_QEMU_NET")) {
+    if ((getenv("VMFC_QEMU_NET") && *getenv("VMFC_QEMU_NET")) || cfg->port_forward[0]) {
+        char netdev[1024];
+        qemu_netdev(cfg, netdev, sizeof(netdev));
         add_arg(argv, &argc, "-netdev");
-        add_arg(argv, &argc, "user,id=net0");
+        add_arg(argv, &argc, "%s", netdev);
         add_arg(argv, &argc, "-device");
         add_arg(argv, &argc, "virtio-net-pci,netdev=net0,mac=%s", cfg->mac);
     } else {
